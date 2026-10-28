@@ -17,7 +17,10 @@ func _init(new_slot: int = -1, new_generation: int = 0, new_epoch: int = 0) -> v
 	_world_epoch = new_epoch
 
 func same_life(other: AgentHandle) -> bool:
-	return other != null and slot == other.slot and generation == other.generation and world_epoch == other.world_epoch
+	# Runtime references usually share the same immutable handle object.
+	if self == other:
+		return true
+	return other != null and _slot == other.slot and _generation == other.generation and _world_epoch == other.world_epoch
 
 func key() -> String:
 	return "%d:%d:%d" % [world_epoch, slot, generation]

@@ -48,6 +48,7 @@ func publish(context: AgentContext) -> void:
 			break
 
 func deliver(ai: AICoordinator, tick: int) -> void:
+	var merge_start: int = Time.get_ticks_usec() if ai.probes.enabled else 0
 	_changed_recipients.clear()
 	var retained: int = 0
 	for message: Message in pending:
@@ -63,6 +64,8 @@ func deliver(ai: AICoordinator, tick: int) -> void:
 		if ai.perception.merge_shared(recipient, message.sighting, tick):
 			_changed_recipients[recipient.handle.slot] = recipient
 	pending.resize(retained)
+	if ai.probes.enabled:
+		ai.probes.record(Probes.Tag.MERGE, Time.get_ticks_usec() - merge_start)
 	# All reports are merged before any derived facts are rebuilt. Decision tasks
 	# cannot run inside this phase, so only the complete recipient snapshot matters.
 	for slot: int in _changed_recipients:

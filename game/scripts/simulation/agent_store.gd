@@ -4,6 +4,9 @@ extends RefCounted
 var count: int = 0
 var capacity: int = 0
 var epoch: int = 1
+# Monotonic within this store, including resets. Derived caches use it only to
+# invalidate lifecycle-dependent summaries; full handles still define identity.
+var life_revision: int = 0
 var position_current: PackedVector2Array = PackedVector2Array()
 var position_next: PackedVector2Array = PackedVector2Array()
 var position_previous: PackedVector2Array = PackedVector2Array()
@@ -18,6 +21,9 @@ var slot_to_dense: PackedInt32Array = PackedInt32Array()
 var dense_to_slot: PackedInt32Array = PackedInt32Array()
 var generations: PackedInt64Array = PackedInt64Array()
 var _handles: Array[AgentHandle] = []
+# Canonical handles are reused by all runtime references. This membership index
+# answers liveness without resolving dense rows; lifecycle methods are its only writers.
+var _live_handles: Dictionary[AgentHandle, bool] = {}
 var _free_slots: Array[int] = []
 var _next_slot: int = 0
 
@@ -59,6 +65,7 @@ func create_agent(kind: int, position: Vector2, body_radius: float = 8.0) -> Age
 	slot_to_dense[slot] = dense
 	dense_to_slot[dense] = slot
 	_handles[dense] = handle
+	_live_handles[handle] = true
 	position_current[dense] = position
 	position_next[dense] = position
 	position_previous[dense] = position
@@ -69,6 +76,7 @@ func create_agent(kind: int, position: Vector2, body_radius: float = 8.0) -> Age
 	species[dense] = kind
 	alive[dense] = 1
 	hunger[dense] = 0.65
+	life_revision += 1
 	return handle
 
 func _find_life(handle: AgentHandle) -> int:
@@ -86,6 +94,10 @@ func resolve(handle: AgentHandle) -> int:
 	return dense
 
 func is_alive(handle: AgentHandle) -> bool:
+	# Equal-value handles from callers still follow the full identity lookup below.
+	# Never cache a dense index: swap deletion moves rows but not life identities.
+	if _live_handles.has(handle):
+		return true
 	return resolve(handle) >= 0
 
 func handle_at(dense: int) -> AgentHandle:
@@ -95,12 +107,15 @@ func handle_at(dense: int) -> AgentHandle:
 func mark_dead(handle: AgentHandle) -> void:
 	var dense: int = resolve(handle)
 	if dense >= 0:
+		_live_handles.erase(_handles[dense])
 		alive[dense] = 0
+		life_revision += 1
 
 func remove_agent(handle: AgentHandle) -> bool:
 	var dense: int = _find_life(handle)
 	if dense < 0:
 		return false
+	_live_handles.erase(_handles[dense])
 	var last: int = count - 1
 	if dense != last:
 		_copy_row(last, dense)
@@ -111,6 +126,7 @@ func remove_agent(handle: AgentHandle) -> bool:
 	slot_to_dense[handle.slot] = -1
 	generations[handle.slot] += 1
 	_free_slots.append(handle.slot)
+	life_revision += 1
 	return true
 
 func _copy_row(source: int, destination: int) -> void:
@@ -138,6 +154,8 @@ func publish_motion() -> void:
 
 func reset() -> void:
 	epoch += 1
+	life_revision += 1
+	_live_handles.clear()
 	count = 0
 	_next_slot = 0
 	_free_slots.clear()

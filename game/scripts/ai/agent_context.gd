@@ -7,6 +7,17 @@ var handle: AgentHandle
 var species: int = SimTypes.Species.SHEEP
 var player: BTPlayer
 var observations: Dictionary[int, LocalObservation] = {}
+# PerceptionSystem alone maintains these derived observation caches. The sheep
+# sum excludes this observer; current self position is added on every refresh.
+var remembered_flock_sum: Vector2 = Vector2.ZERO
+var remembered_flock_count: int = 0
+var flock_cache_dirty: bool = true
+var flock_cache_expires_tick: int = 0
+var fact_cache_life_revision: int = -1
+var threat_view_dirty: bool = true
+var threat_observations: Array[LocalObservation] = []
+# Indices refer only to threat_observations, never AgentStore dense indices.
+var threat_view_indices: Dictionary[int, int] = {}
 var threat: LocalObservation
 var prey: LocalObservation
 var dog_threat: LocalObservation
@@ -66,6 +77,14 @@ func clear_runtime() -> void:
 		if player.get_bt_instance() != null:
 			player.get_bt_instance().get_root_task().abort()
 	observations.clear()
+	remembered_flock_sum = Vector2.ZERO
+	remembered_flock_count = 0
+	flock_cache_dirty = true
+	flock_cache_expires_tick = 0
+	fact_cache_life_revision = -1
+	threat_view_dirty = true
+	threat_observations.clear()
+	threat_view_indices.clear()
 	threat = null
 	prey = null
 	dog_threat = null

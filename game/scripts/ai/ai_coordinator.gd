@@ -140,7 +140,12 @@ func begin_step(tick: int) -> void:
 	current_tick = tick
 	var started: int = Time.get_ticks_usec()
 	coordination.begin_step(tick)
+	var delivery_start: int = Time.get_ticks_usec() if probes.enabled else 0
+	if probes.enabled:
+		probes.record(Probes.Tag.COORDINATION, delivery_start - started)
 	knowledge.deliver(self, tick)
+	if probes.enabled:
+		probes.record(Probes.Tag.DELIVERY, Time.get_ticks_usec() - delivery_start)
 	if probes.enabled:
 		probes.record(Probes.Tag.BEGIN_STEP, Time.get_ticks_usec() - started)
 	frame_used_usec += Time.get_ticks_usec() - started
