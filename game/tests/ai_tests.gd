@@ -40,6 +40,10 @@ func _run() -> void:
 	await _test_scheduler_and_reuse()
 	await _test_cross_step_stage_fairness()
 	await _test_cross_step_urgent_fairness()
+	await _test_superseded_normal_entry()
+	await _test_decision_queue_borrowing()
+	await _test_stale_and_promoted_heads()
+	await _test_queued_decision_reuse()
 	print("AI_TESTS checks=%d failures=%d" % [_checks, _failures])
 	quit(0 if _failures == 0 else 1)
 
@@ -367,24 +371,136 @@ func _test_cross_step_urgent_fairness() -> void:
 	root.add_child(ai)
 	ai.setup(store, SpatialGrid.new(config.world_size, config.cell_size), ResourceGrid.new(config), IntentBuffer.new(), config)
 	var normals: Array[AgentHandle] = []
-	for index: int in range(13):
+	for index: int in 4:
 		var handle: AgentHandle = store.create_agent(SimTypes.Species.SHEEP, Vector2(200 + index, 200))
-		ai.register_agent(handle, 0)
+		ai.register_agent(handle, 1000)
+		ai._schedule_decision(ai.contexts[handle.slot], 0)
 		normals.append(handle)
 	var urgent: AgentHandle = store.create_agent(SimTypes.Species.SHEEP, Vector2(250, 200))
-	ai.register_agent(urgent, 0)
+	ai.register_agent(urgent, 1000)
 	await process_frame
-	for tick: int in range(8):
+	for tick: int in 8:
 		ai.wake_for_observation(ai.contexts[urgent.slot], tick)
 		ai.begin_frame()
 		ai.begin_step(tick)
 		ai.step(tick)
-	var served_normals: int = 0
-	for handle: AgentHandle in normals:
-		if ai.contexts[handle.slot].last_decision_tick > 0:
-			served_normals += 1
-	_check(served_normals == 6, "Persistent urgent traffic leaves six of eight one-job dispatches for normal FIFO work")
-	_check(ai.contexts[urgent.slot].last_decision_tick == 4, "Urgent quota survives eight separate frame-budget resets")
+		if tick == 0:
+			_check(ai.contexts[urgent.slot].last_decision_tick == 0 and ai.contexts[normals[0].slot].last_decision_tick == 1000, "Equal-deadline queue heads prefer the urgent request")
+		elif tick <= 4:
+			_check(ai.contexts[normals[tick - 1].slot].last_decision_tick == tick and ai.contexts[urgent.slot].last_decision_tick == 0, "Continuous new urgent traffic cannot overtake older normal work across frames")
+	_check(ai.contexts[urgent.slot].last_decision_tick == 7, "Urgent work uses available capacity after older normal requests complete")
+	ai.queue_free()
+	await process_frame
+
+func _test_superseded_normal_entry() -> void:
+	var store := AgentStore.new()
+	var config := SimulationConfig.new()
+	var ai: AICoordinator = _new_ai(store, config)
+	var promoted: AgentHandle = store.create_agent(SimTypes.Species.SHEEP, Vector2(200, 200))
+	var waiting: AgentHandle = store.create_agent(SimTypes.Species.SHEEP, Vector2(220, 200))
+	ai.register_agent(promoted, 0)
+	ai.register_agent(waiting, 0)
+	await process_frame
+	var promoted_context: AgentContext = ai.contexts[promoted.slot]
+	var waiting_context: AgentContext = ai.contexts[waiting.slot]
+	ai._schedule_decision(promoted_context, 0)
+	ai._schedule_decision(waiting_context, 0)
+	ai._enqueue_due(0)
+	ai._request_urgent(promoted_context, 0)
+	_check(ai._run_decision(0) and not promoted_context.decision_queued, "Urgent service completes the promoted normal request")
+	# Its former normal entry remains physically ahead of the waiting agent.
+	# A new periodic request must join at the tail, not revive that old entry.
+	ai._enqueue_due(ai.settings.calm_decision_ticks)
+	_check(ai._run_decision(ai.settings.calm_decision_ticks), "A queued periodic decision is dispatched")
+	_check(waiting_context.last_decision_tick == ai.settings.calm_decision_ticks and promoted_context.last_decision_tick == 0, "A superseded normal entry cannot revive when the same life becomes due again")
+	ai.queue_free()
+	await process_frame
+
+func _test_decision_queue_borrowing() -> void:
+	for urgent_only: bool in [false, true]:
+		var store := AgentStore.new()
+		var config := SimulationConfig.new()
+		config.perception_jobs = 0
+		var ai := SingleJobBudgetCoordinator.new()
+		root.add_child(ai)
+		ai.setup(store, SpatialGrid.new(config.world_size, config.cell_size), ResourceGrid.new(config), IntentBuffer.new(), config)
+		ai.probes = Probes.new(true)
+		for index: int in 8:
+			var handle: AgentHandle = store.create_agent(SimTypes.Species.SHEEP, Vector2(200 + index, 200))
+			ai.register_agent(handle, 1000)
+			if urgent_only:
+				ai._request_urgent(ai.contexts[handle.slot], 0)
+			else:
+				ai._schedule_decision(ai.contexts[handle.slot], 0)
+		await process_frame
+		for tick: int in 8:
+			ai.begin_frame()
+			ai.begin_step(tick)
+			ai.step(tick)
+		_check(ai.probes.counters[Probes.Counter.DECISION_SERVED] == 8, "A sole nonempty decision queue borrows every dispatch slot across frames")
+		_check(ai.probes.counters[Probes.Counter.URGENT_SERVED] == (8 if urgent_only else 0), "Borrowed capacity retains the request's actual priority")
+		ai.queue_free()
+		await process_frame
+
+func _test_stale_and_promoted_heads() -> void:
+	var store := AgentStore.new()
+	var ai: AICoordinator = _new_ai(store, SimulationConfig.new())
+	ai.probes = Probes.new(true)
+	var agents: Array[AgentHandle] = []
+	for index: int in 7:
+		var handle: AgentHandle = store.create_agent(SimTypes.Species.SHEEP, Vector2(200 + index, 200))
+		ai.register_agent(handle, 1000)
+		agents.append(handle)
+	await process_frame
+	var promoted: AgentContext = ai.contexts[agents[0].slot]
+	var removed: AgentContext = ai.contexts[agents[1].slot]
+	var waiting: AgentContext = ai.contexts[agents[2].slot]
+	var promoted_later: AgentContext = ai.contexts[agents[6].slot]
+	for context: AgentContext in [promoted, removed, promoted_later, waiting]:
+		ai._schedule_decision(context, 0)
+	ai._enqueue_due(0)
+	var original_ticket: int = promoted_later.decision_ticket
+	for index: int in [1, 0, 3, 4, 5, 6]:
+		ai._request_urgent(ai.contexts[agents[index].slot], 1)
+	ai._request_urgent(promoted_later, 2)
+	_check(promoted_later.decision_ticket == original_ticket and ai._urgent_queue.size() == 6, "Promotion keeps one logical ticket and repeated urgent requests do not append duplicates")
+	_check(ai._urgent_queue[-1].due_tick == 0, "Late promotion preserves the original deadline without moving ahead within the urgent FIFO")
+	ai.unregister_agent(agents[1])
+	store.remove_agent(agents[1])
+	_check(ai._run_decision(3), "Live urgent head remains dispatchable after stale urgent and promoted normal copies")
+	_check(promoted.last_decision_tick == 3 and waiting.decision_queued, "Equal-deadline urgent head wins after both heads have been cleaned")
+	_check(ai.probes.counters[Probes.Counter.DECISION_STALE] == 1 and ai.probes.counters[Probes.Counter.URGENT_STALE] == 1, "Removed-life copies count as stale while live promoted normal copies do not")
+	_check(ai._run_decision(4) and waiting.last_decision_tick == 4, "An older valid normal head wins over a newer urgent head")
+	for tick: int in range(5, 9):
+		_check(ai._run_decision(tick), "Remaining urgent requests borrow empty normal capacity")
+	_check(ai.contexts[agents[3].slot].last_decision_tick == 5 and ai.contexts[agents[4].slot].last_decision_tick == 6 and ai.contexts[agents[5].slot].last_decision_tick == 7 and promoted_later.last_decision_tick == 8, "Urgent requests retain promotion FIFO order even when a later entry has an older deadline")
+	_check(not ai._run_decision(9), "Skipped or promoted copies cannot execute an extra decision")
+	_check(ai.probes.counters[Probes.Counter.URGENT_SERVED] == 5 and ai.probes.counters[Probes.Counter.DECISION_SERVED] == 6, "Priority counters count successful decisions, not canceled copies")
+	ai.queue_free()
+	await process_frame
+
+func _test_queued_decision_reuse() -> void:
+	var store := AgentStore.new()
+	var ai: AICoordinator = _new_ai(store, SimulationConfig.new())
+	ai.probes = Probes.new(true)
+	var old: AgentHandle = store.create_agent(SimTypes.Species.SHEEP, Vector2(200, 200))
+	ai.register_agent(old, 1000)
+	await process_frame
+	var pooled: AgentContext = ai.contexts[old.slot]
+	ai._schedule_decision(pooled, 0)
+	ai._enqueue_due(0)
+	ai._request_urgent(pooled, 0)
+	var old_ticket: int = pooled.decision_ticket
+	ai.unregister_agent(old)
+	store.remove_agent(old)
+	var replacement: AgentHandle = store.create_agent(SimTypes.Species.SHEEP, Vector2(220, 200))
+	ai.register_agent(replacement, 1000)
+	ai._request_urgent(ai.contexts[replacement.slot], 1)
+	_check(ai.contexts[replacement.slot] == pooled and pooled.decision_ticket > old_ticket, "Pool reuse invalidates request tickets as well as old life identities")
+	_check(ai._run_decision(1) and not ai._run_decision(1) and pooled.last_decision_tick == 1, "Stale queued handles cannot execute a replacement's decision or duplicate it")
+	ai._request_urgent(pooled, 2)
+	ai.reset()
+	_check(not pooled.decision_queued and not pooled.urgent_queued and not ai._run_decision(2) and ai._decision_head == 0 and ai._urgent_head == 0, "Reset clears pending decisions and both queue cursors")
 	ai.queue_free()
 	await process_frame
 

@@ -37,6 +37,8 @@ var next_decision_tick: int = 0
 var perception_queued: bool = false
 var decision_queued: bool = false
 var urgent_queued: bool = false
+# Distinguishes successive pending requests for one life, including promotion.
+var decision_ticket: int = 0
 var current_tick: int = 0
 var last_decision_tick: int = 0
 var last_perception_tick: int = -1
@@ -94,3 +96,4 @@ func clear_runtime() -> void:
 	perception_queued = false
 	decision_queued = false
 	urgent_queued = false
+	decision_ticket += 1

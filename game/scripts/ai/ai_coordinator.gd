@@ -1,6 +1,18 @@
 class_name AICoordinator
 extends Node
 enum Stage { PERCEPTION, DECISION }
+class DecisionEntry extends RefCounted:
+	var handle: AgentHandle
+	var ticket: int
+	var _due_tick: int
+	var due_tick: int:
+		get: return _due_tick
+
+	func _init(agent_handle: AgentHandle, request_ticket: int, request_due_tick: int) -> void:
+		handle = agent_handle
+		ticket = request_ticket
+		_due_tick = request_due_tick
+
 ## Public AI boundary. Time buckets enqueue once; FIFO queues retain deferred work.
 ## One shared render-frame wall-clock budget covers all fixed-step catch-up calls.
 var probes: Probes
@@ -26,14 +38,13 @@ var _pools: Array[Array] = [[], [], []]
 var _perception_due: Dictionary[int, Array] = {}
 var _decision_due: Dictionary[int, Array] = {}
 var _perception_queue: Array[AgentHandle] = []
-var _decision_queue: Array[AgentHandle] = []
-var _urgent_queue: Array[AgentHandle] = []
+var _decision_queue: Array[DecisionEntry] = []
+var _urgent_queue: Array[DecisionEntry] = []
 var _perception_head: int = 0
 var _decision_head: int = 0
 var _urgent_head: int = 0
-# These fairness cursors survive both fixed-step and render-frame boundaries.
+# This stage cursor survives both fixed-step and render-frame boundaries.
 var _next_stage: Stage = Stage.PERCEPTION
-var _decision_dispatch_count: int = 0
 
 func _init(instrumentation: Probes = null) -> void:
 	probes = instrumentation if instrumentation != null else Probes.new()
@@ -122,7 +133,6 @@ func reset() -> void:
 	_decision_head = 0
 	_urgent_head = 0
 	_next_stage = Stage.PERCEPTION
-	_decision_dispatch_count = 0
 	current_tick = 0
 	frame_used_usec = 0
 	last_perception_jobs = 0
@@ -221,17 +231,20 @@ func _enqueue_due(tick: int) -> void:
 		for handle: AgentHandle in _decision_due[tick]:
 			var context: AgentContext = _context(handle)
 			if context != null and not context.decision_queued and context.next_decision_tick == tick:
+				context.decision_ticket += 1
 				context.decision_queued = true
-				_decision_queue.append(handle)
+				_decision_queue.append(DecisionEntry.new(handle, context.decision_ticket, tick))
 		_decision_due.erase(tick)
 
 func _request_urgent(context: AgentContext, tick: int) -> void:
 	if context.urgent_queued:
 		return
 	context.next_decision_tick = mini(context.next_decision_tick, tick)
+	if not context.decision_queued:
+		context.decision_ticket += 1
 	context.decision_queued = true
 	context.urgent_queued = true
-	_urgent_queue.append(context.handle)
+	_urgent_queue.append(DecisionEntry.new(context.handle, context.decision_ticket, context.next_decision_tick))
 
 func _run_perception(tick: int) -> bool:
 	while _perception_head < _perception_queue.size():
@@ -265,47 +278,62 @@ func _run_perception(tick: int) -> bool:
 		return true
 	return false
 
-func _run_decision(tick: int) -> bool:
-	# The quota counts actual dispatches across steps. Per-step counters would
-	# always select urgent work when a frame can afford only one decision.
-	while _urgent_head < _urgent_queue.size() or _decision_head < _decision_queue.size():
-		var urgent: bool = _urgent_head < _urgent_queue.size() and (_decision_dispatch_count % 4 == 0 or _decision_head >= _decision_queue.size())
-		var handle: AgentHandle
-		if urgent:
-			handle = _urgent_queue[_urgent_head]
-			_urgent_head += 1
-		else:
-			handle = _decision_queue[_decision_head]
-			_decision_head += 1
-		var context: AgentContext = _context(handle)
-		if context == null or not context.decision_queued:
+func _peek_decision(urgent: bool) -> DecisionEntry:
+	var queue: Array[DecisionEntry] = _urgent_queue if urgent else _decision_queue
+	var head: int = _urgent_head if urgent else _decision_head
+	while head < queue.size():
+		var entry: DecisionEntry = queue[head]
+		var context: AgentContext = _context(entry.handle)
+		var current_request: bool = context != null and context.decision_queued and context.decision_ticket == entry.ticket
+		if current_request and context.urgent_queued == urgent:
+			break
+		# Promotion cancels the normal copy, but remains the same live request.
+		# Superseded tickets and removed lives count as stale physical entries.
+		if not current_request or urgent:
 			if probes.enabled:
 				probes.count_job(Probes.Counter.URGENT_STALE if urgent else Probes.Counter.DECISION_STALE)
-			continue
-		if not urgent and context.urgent_queued:
-			continue
-		context.decision_queued = false
-		context.urgent_queued = false
-		context.current_tick = tick
-		max_decision_delay_ticks = maxi(max_decision_delay_ticks, tick - context.next_decision_tick)
-		if context.player.get_bt_instance() != null:
-			var elapsed: float = float(maxi(1, tick - context.last_decision_tick)) * config.fixed_dt
-			var update_start: int = Time.get_ticks_usec() if probes.enabled else 0
-			context.player.update(elapsed)
-			if probes.enabled:
-				var elapsed_us: int = Time.get_ticks_usec() - update_start
-				probes.record(Probes.Tag.DECISION, elapsed_us)
-				probes.job(Probes.Tag.DECISION, context.species, elapsed_us, 0, context.observations.size(), probes.task_names.find(context.task_name), tick - context.last_decision_tick)
-				probes.count_job(Probes.Counter.DECISION_SERVED)
-				if urgent:
-					probes.count_job(Probes.Counter.URGENT_SERVED)
-		context.last_decision_tick = tick
-		var interval: int = settings.alert_decision_ticks if context.is_alert() else settings.calm_decision_ticks
-		_schedule_decision(context, tick + interval)
-		last_decision_jobs += 1
-		_decision_dispatch_count += 1
-		return true
-	return false
+		head += 1
+	if urgent:
+		_urgent_head = head
+	else:
+		_decision_head = head
+	return queue[head] if head < queue.size() else null
+
+func _run_decision(tick: int) -> bool:
+	var normal_entry: DecisionEntry = _peek_decision(false)
+	var urgent_entry: DecisionEntry = _peek_decision(true)
+	if normal_entry == null and urgent_entry == null:
+		return false
+	# Compare the two live FIFO heads by original due time; urgency breaks ties.
+	# Promotion retains age but does not reorder the urgent FIFO, so this is not
+	# a global earliest-deadline sort and does not scan or sort whole queues.
+	var urgent: bool = urgent_entry != null and (normal_entry == null or urgent_entry.due_tick <= normal_entry.due_tick)
+	var entry: DecisionEntry = urgent_entry if urgent else normal_entry
+	if urgent:
+		_urgent_head += 1
+	else:
+		_decision_head += 1
+	var context: AgentContext = _context(entry.handle)
+	context.decision_queued = false
+	context.urgent_queued = false
+	context.current_tick = tick
+	max_decision_delay_ticks = maxi(max_decision_delay_ticks, tick - entry.due_tick)
+	if context.player.get_bt_instance() != null:
+		var elapsed: float = float(maxi(1, tick - context.last_decision_tick)) * config.fixed_dt
+		var update_start: int = Time.get_ticks_usec() if probes.enabled else 0
+		context.player.update(elapsed)
+		if probes.enabled:
+			var elapsed_us: int = Time.get_ticks_usec() - update_start
+			probes.record(Probes.Tag.DECISION, elapsed_us)
+			probes.job(Probes.Tag.DECISION, context.species, elapsed_us, 0, context.observations.size(), probes.task_names.find(context.task_name), tick - context.last_decision_tick)
+			probes.count_job(Probes.Counter.DECISION_SERVED)
+			if urgent:
+				probes.count_job(Probes.Counter.URGENT_SERVED)
+	context.last_decision_tick = tick
+	var interval: int = settings.alert_decision_ticks if context.is_alert() else settings.calm_decision_ticks
+	_schedule_decision(context, tick + interval)
+	last_decision_jobs += 1
+	return true
 
 func _compact_queues() -> void:
 	if _perception_head > 1024 or _perception_head == _perception_queue.size():
