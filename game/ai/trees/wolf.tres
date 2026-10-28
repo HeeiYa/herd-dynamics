@@ -1,0 +1,97 @@
+[gd_resource type="BehaviorTree" format=3 uid="uid://chfj2nwqfd3my"]
+
+[ext_resource type="Script" uid="uid://mn0ku6qxgl82" path="res://scripts/ai/tasks/check_fact.gd" id="check_fact"]
+[ext_resource type="Script" uid="uid://dvh7v7k17ukqv" path="res://scripts/ai/tasks/feed_capture.gd" id="feed_capture"]
+[ext_resource type="Script" uid="uid://b24nsebdxbbpo" path="res://scripts/ai/tasks/flee_threat.gd" id="flee_threat"]
+[ext_resource type="Script" uid="uid://db627mrmpo2p6" path="res://scripts/ai/tasks/hunt_prey.gd" id="hunt_prey"]
+[ext_resource type="Script" uid="uid://c1b1vrarigkyj" path="res://scripts/ai/tasks/request_attack.gd" id="request_attack"]
+[ext_resource type="Script" uid="uid://d0sw8gpbdgqr4" path="res://scripts/ai/tasks/search_area.gd" id="search_area"]
+[ext_resource type="Script" uid="uid://d28atl54ovet" path="res://scripts/ai/tasks/search_memory.gd" id="search_memory"]
+[ext_resource type="Script" uid="uid://qxu85i0bx1ik" path="res://scripts/ai/tasks/select_prey.gd" id="select_prey"]
+
+[sub_resource type="BlackboardPlan" id="BlackboardPlan_yhyco"]
+
+[sub_resource type="BTCondition" id="condition_0"]
+custom_name = "Dog danger"
+script = ExtResource("check_fact")
+
+[sub_resource type="BTAction" id="action_0_0"]
+custom_name = "flee_threat"
+script = ExtResource("flee_threat")
+
+[sub_resource type="BTDynamicSequence" id="branch_0"]
+custom_name = "Dog danger (continuous guard)"
+children = [SubResource("condition_0"), SubResource("action_0_0")]
+
+[sub_resource type="BTCondition" id="condition_1"]
+custom_name = "Capture feeding permit"
+script = ExtResource("check_fact")
+fact = 2
+
+[sub_resource type="BTAction" id="action_1_0"]
+custom_name = "feed_capture"
+script = ExtResource("feed_capture")
+
+[sub_resource type="BTDynamicSequence" id="branch_1"]
+custom_name = "Capture feeding permit (continuous guard)"
+children = [SubResource("condition_1"), SubResource("action_1_0")]
+
+[sub_resource type="BTCondition" id="condition_2"]
+custom_name = "Prey within attack range"
+script = ExtResource("check_fact")
+fact = 4
+
+[sub_resource type="BTAction" id="action_2_0"]
+custom_name = "request_attack"
+script = ExtResource("request_attack")
+
+[sub_resource type="BTDynamicSequence" id="branch_2"]
+custom_name = "Prey within attack range (continuous guard)"
+children = [SubResource("condition_2"), SubResource("action_2_0")]
+
+[sub_resource type="BTCondition" id="condition_3"]
+custom_name = "Directly visible prey"
+script = ExtResource("check_fact")
+fact = 9
+
+[sub_resource type="BTAction" id="action_3_0"]
+custom_name = "select_prey"
+script = ExtResource("select_prey")
+
+[sub_resource type="BTAction" id="action_3_1"]
+custom_name = "hunt_prey"
+script = ExtResource("hunt_prey")
+
+[sub_resource type="BTDynamicSequence" id="branch_3"]
+custom_name = "Visible hunt (continuous guard)"
+children = [SubResource("condition_3"), SubResource("action_3_0"), SubResource("action_3_1")]
+
+[sub_resource type="BTCondition" id="condition_memory"]
+custom_name = "Only remembered prey remains"
+script = ExtResource("check_fact")
+fact = 3
+
+[sub_resource type="BTAction" id="select_memory"]
+custom_name = "Select remembered prey"
+script = ExtResource("select_prey")
+require_direct_sighting = false
+
+[sub_resource type="BTAction" id="search_memory"]
+custom_name = "Search finite memory without hunt lease"
+script = ExtResource("search_memory")
+
+[sub_resource type="BTDynamicSequence" id="branch_memory"]
+custom_name = "Finite memory search (continuous guard)"
+children = [SubResource("condition_memory"), SubResource("select_memory"), SubResource("search_memory")]
+
+[sub_resource type="BTAction" id="fallback"]
+custom_name = "search_area"
+script = ExtResource("search_area")
+
+[sub_resource type="BTDynamicSelector" id="root"]
+custom_name = "Reactive priorities"
+children = [SubResource("branch_0"), SubResource("branch_1"), SubResource("branch_2"), SubResource("branch_3"), SubResource("branch_memory"), SubResource("fallback")]
+
+[resource]
+blackboard_plan = SubResource("BlackboardPlan_yhyco")
+root_task = SubResource("root")

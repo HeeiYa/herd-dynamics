@@ -1,0 +1,36 @@
+class_name AISettings
+extends Resource
+## Shared, read-only strategy parameters. Units are pixels, seconds, or simulation ticks.
+@export var calm_perception_ticks: int = 6
+@export var alert_perception_ticks: int = 3
+@export var calm_decision_ticks: int = 12
+@export var alert_decision_ticks: int = 3
+@export var sheep_speed: float = 74.0
+@export var sheep_flee_speed: float = 116.0
+@export var wolf_speed: float = 128.0
+@export var wolf_search_speed: float = 67.0
+@export var dog_speed: float = 155.0
+@export var guard_speed: float = 66.0
+@export var graze_speed: float = 38.0
+@export var regroup_distance: float = 80.0
+@export var graze_arrival_distance: float = 22.0
+@export var dog_risk_radius: float = 105.0
+@export var wolf_commit_ticks: int = 90
+@export var target_switch_ratio: float = 0.72
+@export var isolation_radius: float = 45.0
+@export var isolation_penalty: float = 15.0
+@export var guarded_prey_penalty: float = 150.0
+@export var flank_distance: float = 58.0
+@export var stalk_distance: float = 135.0
+@export var prediction_seconds: float = 0.45
+@export var max_prediction_distance: float = 55.0
+@export var dog_intercept_ticks: int = 180
+@export var dog_rest_ticks: int = 60
+@export var guard_arrival_distance: float = 42.0
+@export var protection_radius: float = 200.0
+@export var cooperation_radius: float = 160.0
+@export var wander_radius: float = 135.0
+@export var wander_ticks: int = 150
+@export var threat_memory_fraction: float = 0.75
+@export var max_share_recipients: int = 4
+@export var attack_approach_margin: float = 16.0

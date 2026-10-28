@@ -1,0 +1,308 @@
+class_name AICoordinator
+extends Node
+enum Stage { PERCEPTION, DECISION }
+## Public AI boundary. Time buckets enqueue once; FIFO queues retain deferred work.
+## One shared render-frame wall-clock budget covers all fixed-step catch-up calls.
+var store: AgentStore
+var grid: SpatialGrid
+var resources: ResourceGrid
+var intents: IntentBuffer
+var config: SimulationConfig
+var settings := AISettings.new()
+var contexts: Dictionary[int, AgentContext] = {}
+var coordination := CoordinationSystem.new()
+var perception := PerceptionSystem.new()
+var knowledge := LocalKnowledgeBroker.new()
+var last_perception_jobs: int = 0
+var last_decision_jobs: int = 0
+var max_decision_delay_ticks: int = 0
+var max_perception_delay_ticks: int = 0
+var budget_exhaustions: int = 0
+var frame_used_usec: int = 0
+var current_tick: int = 0
+var _trees: Array[BehaviorTree] = []
+var _pools: Array[Array] = [[], [], []]
+var _perception_due: Dictionary[int, Array] = {}
+var _decision_due: Dictionary[int, Array] = {}
+var _perception_queue: Array[AgentHandle] = []
+var _decision_queue: Array[AgentHandle] = []
+var _urgent_queue: Array[AgentHandle] = []
+var _perception_head: int = 0
+var _decision_head: int = 0
+var _urgent_head: int = 0
+# These fairness cursors survive both fixed-step and render-frame boundaries.
+var _next_stage: Stage = Stage.PERCEPTION
+var _decision_dispatch_count: int = 0
+
+func setup(agent_store: AgentStore, spatial_grid: SpatialGrid, resource_grid: ResourceGrid, intent_buffer: IntentBuffer, simulation_config: SimulationConfig) -> void:
+	store = agent_store
+	grid = spatial_grid
+	resources = resource_grid
+	intents = intent_buffer
+	config = simulation_config
+	coordination.setup(store, config, settings)
+	_trees.assign([
+		load("res://ai/trees/sheep.tres") as BehaviorTree,
+		load("res://ai/trees/wolf.tres") as BehaviorTree,
+		load("res://ai/trees/dog.tres") as BehaviorTree,
+	])
+	for tree: BehaviorTree in _trees:
+		assert(tree != null, "The three formal behavior tree resources must load.")
+
+func register_agent(handle: AgentHandle, created_tick: int = -1) -> void:
+	var birth_tick: int = current_tick if created_tick < 0 else created_tick
+	var dense: int = store.resolve(handle)
+	assert(dense >= 0)
+	var species: int = store.species[dense]
+	var context: AgentContext
+	if not _pools[species].is_empty():
+		context = _pools[species].pop_back() as AgentContext
+	else:
+		context = AgentContext.new()
+		context.coordinator = self
+		context.species = species
+		context.name = "AgentContext"
+		add_child(context)
+		context.player = BTPlayer.new()
+		context.player.name = "BehaviorTree"
+		context.player.update_mode = BTPlayer.MANUAL
+		context.player.blackboard = Blackboard.new()
+		context.player.blackboard.set_var(AIBlackboard.CONTEXT, context)
+		context.player.set_scene_root_hint(context)
+		context.player.behavior_tree = _trees[species]
+		context.add_child(context.player)
+	context.handle = handle
+	context.current_tick = birth_tick
+	context.last_decision_tick = birth_tick
+	context.last_perception_tick = -1
+	context.safe_after_tick = 0
+	context.commit_until = 0
+	context.pursuit_until = 0
+	context.intercept_rest_until = 0
+	context.feeding_until = 0
+	context.flock_count = 0
+	context.protection_anchor = store.position_current[dense]
+	context.flock_center = context.protection_anchor
+	context.wander_until = 0
+	context.task_name = &"Waiting for first perception"
+	context.player.active = true
+	contexts[handle.slot] = context
+	_schedule_perception(context, birth_tick + handle.slot % settings.calm_perception_ticks)
+	_schedule_decision(context, birth_tick + handle.slot % settings.calm_decision_ticks)
+
+func unregister_agent(handle: AgentHandle) -> void:
+	var context: AgentContext = _context(handle)
+	if context == null:
+		return
+	context.clear_runtime()
+	coordination.remove(handle)
+	knowledge.remove(handle)
+	intents.remove(handle)
+	contexts.erase(handle.slot)
+	_pools[context.species].append(context)
+
+func reset() -> void:
+	for slot: int in contexts:
+		var context: AgentContext = contexts[slot]
+		context.clear_runtime()
+		_pools[context.species].append(context)
+	contexts.clear()
+	coordination.clear()
+	knowledge.clear()
+	_perception_due.clear()
+	_decision_due.clear()
+	_perception_queue.clear()
+	_decision_queue.clear()
+	_urgent_queue.clear()
+	_perception_head = 0
+	_decision_head = 0
+	_urgent_head = 0
+	_next_stage = Stage.PERCEPTION
+	_decision_dispatch_count = 0
+	current_tick = 0
+	frame_used_usec = 0
+	last_perception_jobs = 0
+	last_decision_jobs = 0
+	max_decision_delay_ticks = 0
+	max_perception_delay_ticks = 0
+	budget_exhaustions = 0
+
+func begin_frame() -> void:
+	frame_used_usec = 0
+
+func begin_step(tick: int) -> void:
+	current_tick = tick
+	var started: int = Time.get_ticks_usec()
+	coordination.begin_step(tick)
+	knowledge.deliver(self, tick)
+	frame_used_usec += Time.get_ticks_usec() - started
+
+func step(tick: int) -> void:
+	current_tick = tick
+	last_perception_jobs = 0
+	last_decision_jobs = 0
+	var started: int = Time.get_ticks_usec()
+	_enqueue_due(tick)
+	# A costly final job leaves the other stage first in line on the next step.
+	while _has_work() and _budget_available(started):
+		if not _run_next_job(tick):
+			break
+	_compact_queues()
+	frame_used_usec += Time.get_ticks_usec() - started
+	if _has_work() and frame_used_usec >= config.ai_budget_usec:
+		budget_exhaustions += 1
+
+func _run_next_job(tick: int) -> bool:
+	var preferred: Stage = _next_stage
+	var alternate: Stage = Stage.DECISION if preferred == Stage.PERCEPTION else Stage.PERCEPTION
+	if _try_stage(preferred, tick):
+		_next_stage = alternate
+		return true
+	if _try_stage(alternate, tick):
+		_next_stage = preferred
+		return true
+	return false
+
+func _try_stage(stage: Stage, tick: int) -> bool:
+	if stage == Stage.PERCEPTION:
+		return last_perception_jobs < config.perception_jobs and _run_perception(tick)
+	return last_decision_jobs < config.decision_jobs and _run_decision(tick)
+
+func _budget_available(started: int) -> bool:
+	return frame_used_usec + Time.get_ticks_usec() - started < config.ai_budget_usec
+
+func _has_work() -> bool:
+	return _perception_head < _perception_queue.size() or _decision_head < _decision_queue.size() or _urgent_head < _urgent_queue.size()
+
+func _context(handle: AgentHandle) -> AgentContext:
+	var context: AgentContext = contexts.get(handle.slot)
+	if context == null or not context.handle.same_life(handle):
+		return null
+	return context
+
+func _schedule_perception(context: AgentContext, due_tick: int) -> void:
+	context.next_perception_tick = due_tick
+	if not _perception_due.has(due_tick):
+		_perception_due[due_tick] = []
+	_perception_due[due_tick].append(context.handle)
+
+func _schedule_decision(context: AgentContext, due_tick: int) -> void:
+	context.next_decision_tick = due_tick
+	if not _decision_due.has(due_tick):
+		_decision_due[due_tick] = []
+	_decision_due[due_tick].append(context.handle)
+
+func _enqueue_due(tick: int) -> void:
+	if _perception_due.has(tick):
+		for handle: AgentHandle in _perception_due[tick]:
+			var context: AgentContext = _context(handle)
+			if context != null and not context.perception_queued and context.next_perception_tick == tick:
+				context.perception_queued = true
+				_perception_queue.append(handle)
+		_perception_due.erase(tick)
+	if _decision_due.has(tick):
+		for handle: AgentHandle in _decision_due[tick]:
+			var context: AgentContext = _context(handle)
+			if context != null and not context.decision_queued and context.next_decision_tick == tick:
+				context.decision_queued = true
+				_decision_queue.append(handle)
+		_decision_due.erase(tick)
+
+func _request_urgent(context: AgentContext, tick: int) -> void:
+	if context.urgent_queued:
+		return
+	context.next_decision_tick = mini(context.next_decision_tick, tick)
+	context.decision_queued = true
+	context.urgent_queued = true
+	_urgent_queue.append(context.handle)
+
+func _run_perception(tick: int) -> bool:
+	while _perception_head < _perception_queue.size():
+		var handle: AgentHandle = _perception_queue[_perception_head]
+		_perception_head += 1
+		var context: AgentContext = _context(handle)
+		if context == null or not context.perception_queued:
+			continue
+		context.current_tick = tick
+		context.perception_queued = false
+		max_perception_delay_ticks = maxi(max_perception_delay_ticks, tick - context.next_perception_tick)
+		var was_alert: bool = context.is_alert()
+		perception.update(context, tick)
+		knowledge.publish(context)
+		if was_alert != context.is_alert():
+			_request_urgent(context, tick)
+		var interval: int = settings.alert_perception_ticks if context.is_alert() else settings.calm_perception_ticks
+		_schedule_perception(context, tick + interval)
+		last_perception_jobs += 1
+		return true
+	return false
+
+func _run_decision(tick: int) -> bool:
+	# The quota counts actual dispatches across steps. Per-step counters would
+	# always select urgent work when a frame can afford only one decision.
+	while _urgent_head < _urgent_queue.size() or _decision_head < _decision_queue.size():
+		var urgent: bool = _urgent_head < _urgent_queue.size() and (_decision_dispatch_count % 4 == 0 or _decision_head >= _decision_queue.size())
+		var handle: AgentHandle
+		if urgent:
+			handle = _urgent_queue[_urgent_head]
+			_urgent_head += 1
+		else:
+			handle = _decision_queue[_decision_head]
+			_decision_head += 1
+		var context: AgentContext = _context(handle)
+		if context == null or not context.decision_queued:
+			continue
+		if not urgent and context.urgent_queued:
+			continue
+		context.decision_queued = false
+		context.urgent_queued = false
+		context.current_tick = tick
+		max_decision_delay_ticks = maxi(max_decision_delay_ticks, tick - context.next_decision_tick)
+		if context.player.get_bt_instance() != null:
+			var elapsed: float = float(maxi(1, tick - context.last_decision_tick)) * config.fixed_dt
+			context.player.update(elapsed)
+		context.last_decision_tick = tick
+		var interval: int = settings.alert_decision_ticks if context.is_alert() else settings.calm_decision_ticks
+		_schedule_decision(context, tick + interval)
+		last_decision_jobs += 1
+		_decision_dispatch_count += 1
+		return true
+	return false
+
+func _compact_queues() -> void:
+	if _perception_head > 1024 or _perception_head == _perception_queue.size():
+		_perception_queue = _perception_queue.slice(_perception_head)
+		_perception_head = 0
+	if _decision_head > 1024 or _decision_head == _decision_queue.size():
+		_decision_queue = _decision_queue.slice(_decision_head)
+		_decision_head = 0
+	if _urgent_head > 1024 or _urgent_head == _urgent_queue.size():
+		_urgent_queue = _urgent_queue.slice(_urgent_head)
+		_urgent_head = 0
+
+func notify_capture(actor: AgentHandle, position: Vector2, end_tick: int) -> void:
+	var context: AgentContext = _context(actor)
+	if context == null:
+		return
+	context.feeding_position = position
+	context.feeding_until = end_tick
+	context.prey = null
+	context.committed_target = null
+	coordination.remove(actor)
+	_request_urgent(context, current_tick)
+
+func is_feeding(handle: AgentHandle, tick: int) -> bool:
+	var context: AgentContext = _context(handle)
+	return context != null and tick < context.feeding_until
+
+func describe(handle: AgentHandle, tick: int) -> String:
+	var context: AgentContext = _context(handle)
+	if context == null:
+		return "AI context unavailable"
+	var lease: CoordinationSystem.Lease = coordination.get_lease(handle, tick)
+	var lease_text: String = "none"
+	if lease != null:
+		lease_text = "%s until %d" % [CoordinationSystem.Role.keys()[lease.role], lease.expires_tick]
+	return "task=%s | sight age=%dt | lease=%s\nnext perception=%d decision=%d | memory=%d" % [context.task_name, tick - context.last_perception_tick, lease_text, context.next_perception_tick, context.next_decision_tick, context.observations.size()]
+func wake_for_observation(context: AgentContext, tick: int) -> void:
+	_request_urgent(context, tick)

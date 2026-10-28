@@ -1,0 +1,46 @@
+[gd_resource type="BehaviorTree" format=3 uid="uid://dk4702qdtxgyu"]
+
+[ext_resource type="Script" uid="uid://mn0ku6qxgl82" path="res://scripts/ai/tasks/check_fact.gd" id="check_fact"]
+[ext_resource type="Script" uid="uid://03m3rj05aq5i" path="res://scripts/ai/tasks/guard_flock.gd" id="guard_flock"]
+[ext_resource type="Script" uid="uid://0jum1nd7q134" path="res://scripts/ai/tasks/intercept_wolf.gd" id="intercept_wolf"]
+[ext_resource type="Script" uid="uid://ccd0o6q147363" path="res://scripts/ai/tasks/return_to_flock.gd" id="return_to_flock"]
+
+[sub_resource type="BlackboardPlan" id="BlackboardPlan_g057h"]
+
+[sub_resource type="BTCondition" id="condition_0"]
+custom_name = "Pursuit duty limit"
+script = ExtResource("check_fact")
+fact = 7
+
+[sub_resource type="BTAction" id="action_0_0"]
+custom_name = "return_to_flock"
+script = ExtResource("return_to_flock")
+
+[sub_resource type="BTDynamicSequence" id="branch_0"]
+custom_name = "Pursuit duty limit (continuous guard)"
+children = [SubResource("condition_0"), SubResource("action_0_0")]
+
+[sub_resource type="BTCondition" id="condition_1"]
+custom_name = "Threat to local flock"
+script = ExtResource("check_fact")
+fact = 8
+
+[sub_resource type="BTAction" id="action_1_0"]
+custom_name = "intercept_wolf"
+script = ExtResource("intercept_wolf")
+
+[sub_resource type="BTDynamicSequence" id="branch_1"]
+custom_name = "Threat to local flock (continuous guard)"
+children = [SubResource("condition_1"), SubResource("action_1_0")]
+
+[sub_resource type="BTAction" id="fallback"]
+custom_name = "guard_flock"
+script = ExtResource("guard_flock")
+
+[sub_resource type="BTDynamicSelector" id="root"]
+custom_name = "Reactive priorities"
+children = [SubResource("branch_0"), SubResource("branch_1"), SubResource("fallback")]
+
+[resource]
+blackboard_plan = SubResource("BlackboardPlan_g057h")
+root_task = SubResource("root")

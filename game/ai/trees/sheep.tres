@@ -1,0 +1,60 @@
+[gd_resource type="BehaviorTree" format=3 uid="uid://6akfmegmcdd1"]
+
+[ext_resource type="Script" uid="uid://mn0ku6qxgl82" path="res://scripts/ai/tasks/check_fact.gd" id="check_fact"]
+[ext_resource type="Script" uid="uid://b24nsebdxbbpo" path="res://scripts/ai/tasks/flee_threat.gd" id="flee_threat"]
+[ext_resource type="Script" uid="uid://cgc6l4y4hhvt2" path="res://scripts/ai/tasks/graze_grass.gd" id="graze_grass"]
+[ext_resource type="Script" uid="uid://dug2kgq7quouk" path="res://scripts/ai/tasks/regroup_flock.gd" id="regroup_flock"]
+[ext_resource type="Script" uid="uid://d0sw8gpbdgqr4" path="res://scripts/ai/tasks/search_area.gd" id="search_area"]
+
+[sub_resource type="BlackboardPlan" id="BlackboardPlan_wpcyd"]
+
+[sub_resource type="BTCondition" id="condition_0"]
+custom_name = "Unsafe or safety hold"
+script = ExtResource("check_fact")
+fact = 1
+
+[sub_resource type="BTAction" id="action_0_0"]
+custom_name = "flee_threat"
+script = ExtResource("flee_threat")
+
+[sub_resource type="BTDynamicSequence" id="branch_0"]
+custom_name = "Unsafe or safety hold (continuous guard)"
+children = [SubResource("condition_0"), SubResource("action_0_0")]
+
+[sub_resource type="BTCondition" id="condition_1"]
+custom_name = "Separated from local flock"
+script = ExtResource("check_fact")
+fact = 5
+
+[sub_resource type="BTAction" id="action_1_0"]
+custom_name = "regroup_flock"
+script = ExtResource("regroup_flock")
+
+[sub_resource type="BTDynamicSequence" id="branch_1"]
+custom_name = "Separated from local flock (continuous guard)"
+children = [SubResource("condition_1"), SubResource("action_1_0")]
+
+[sub_resource type="BTCondition" id="condition_2"]
+custom_name = "Local grass available"
+script = ExtResource("check_fact")
+fact = 6
+
+[sub_resource type="BTAction" id="action_2_0"]
+custom_name = "graze_grass"
+script = ExtResource("graze_grass")
+
+[sub_resource type="BTDynamicSequence" id="branch_2"]
+custom_name = "Local grass available (continuous guard)"
+children = [SubResource("condition_2"), SubResource("action_2_0")]
+
+[sub_resource type="BTAction" id="fallback"]
+custom_name = "search_area"
+script = ExtResource("search_area")
+
+[sub_resource type="BTDynamicSelector" id="root"]
+custom_name = "Reactive priorities"
+children = [SubResource("branch_0"), SubResource("branch_1"), SubResource("branch_2"), SubResource("fallback")]
+
+[resource]
+blackboard_plan = SubResource("BlackboardPlan_wpcyd")
+root_task = SubResource("root")
