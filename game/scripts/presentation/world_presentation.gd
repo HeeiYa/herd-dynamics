@@ -3,6 +3,7 @@ extends Node2D
 ## Presentation owns no simulation truth. All records hold full lifetime handles.
 
 @export var body_scale: float = 1.0
+var probes: Probes
 var visible_count: int = 0
 var capture_visible_count: int = 0
 var render_build_usec: int = 0
@@ -72,6 +73,9 @@ var _shadow_capacity: int = 0
 var _epoch: int = -1
 var _observed_tick: int = -1
 var _seed: int = 42
+
+func _init(instrumentation: Probes = null) -> void:
+	probes = instrumentation if instrumentation != null else Probes.new()
 
 func setup(store: AgentStore, intents: IntentBuffer, resources: ResourceGrid, config: SimulationConfig) -> void:
 	_store = store
@@ -215,8 +219,11 @@ func present(tick: int, alpha: float, direct: bool = false) -> void:
 	observe_published(tick)
 	var interpolation: float = clampf(alpha, 0.0, 1.0)
 	var display_tick: float = float(tick) if direct else maxf(0.0, tick - 1 + interpolation)
+	var grass_start: int = Time.get_ticks_usec() if probes.enabled else 0
 	for chunk: GrassChunk in _ground_chunks:
 		chunk.update_at(display_tick)
+	if probes.enabled:
+		probes.record(Probes.Tag.GRASS, Time.get_ticks_usec() - grass_start)
 	_draw_list.clear()
 	visible_count = 0
 	capture_visible_count = 0
@@ -243,6 +250,9 @@ func present(tick: int, alpha: float, direct: bool = false) -> void:
 	_update_selection(interpolation, direct)
 	queue_redraw()
 	render_build_usec = Time.get_ticks_usec() - started_usec
+	if probes.enabled:
+		probes.record(Probes.Tag.BUILD, render_build_usec)
+		probes.record(Probes.Tag.SORT, sort_usec)
 
 func _prepare_drawing(entry: DrawEntry, foot: Vector2, action: int, direction: int, elapsed_ms: float) -> void:
 	var clip: AnimationCatalog.Clip = _catalog.get_clip(action, direction)

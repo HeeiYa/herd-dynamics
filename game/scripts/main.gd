@@ -19,7 +19,7 @@ var _layout: OptionButton
 func _ready() -> void:
 	if not has_meta("benchmark_view"):
 		for argument: String in OS.get_cmdline_user_args():
-			if argument in ["--benchmark=cpu", "--benchmark=frames"]:
+			if argument in ["--benchmark=cpu", "--benchmark=frames", "--benchmark=threat"]:
 				get_tree().root.add_child.call_deferred(BenchmarkSession.new())
 				queue_free()
 				return
@@ -30,7 +30,7 @@ func _initialize() -> void:
 	_world = SimulationWorld.new()
 	add_child(_world)
 	_world.setup(SimulationConfig.new(), ScenarioConfig.new())
-	_view = WorldPresentation.new()
+	_view = WorldPresentation.new(_world.probes)
 	add_child(_view)
 	_view.setup(_world.store, _world.intents, _world.resources, _world.config)
 	_view.set_seed(_world.scenario.random_seed)

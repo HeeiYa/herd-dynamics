@@ -1,6 +1,7 @@
 class_name SimulationConfig
 extends Resource
 ## Durations ending in _ticks use the single fixed simulation clock.
+@export var instrument_enabled: bool = false
 @export var fixed_dt: float = 1.0 / 60.0
 @export var world_size: Vector2 = Vector2(1600.0, 1000.0)
 @export var cell_size: float = 80.0

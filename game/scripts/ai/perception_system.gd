@@ -7,7 +7,10 @@ var _expired: Array[int] = []
 func update(context: AgentContext, tick: int) -> void:
 	var ai: AICoordinator = context.coordinator
 	var origin: Vector2 = context.position()
+	var query_start: int = Time.get_ticks_usec() if ai.probes.enabled else 0
 	ai.grid.query(origin, ai.config.perception_radius, -1, ai.store, _neighbors)
+	if ai.probes.enabled:
+		ai.probes.record(Probes.Tag.QUERY, Time.get_ticks_usec() - query_start)
 	for dense: int in _neighbors:
 		var target: AgentHandle = ai.store.handle_at(dense)
 		if target.same_life(context.handle):
@@ -36,6 +39,7 @@ func update(context: AgentContext, tick: int) -> void:
 
 func _refresh_local_facts(context: AgentContext, tick: int) -> void:
 	var ai: AICoordinator = context.coordinator
+	var refresh_start: int = Time.get_ticks_usec() if ai.probes.enabled else 0
 	var origin: Vector2 = context.position()
 	var flock_sum := Vector2.ZERO
 	context.flock_count = 0
@@ -79,6 +83,9 @@ func _refresh_local_facts(context: AgentContext, tick: int) -> void:
 		context.safe_after_tick = maxi(context.safe_after_tick, context.threat.observed_tick + ai.config.safe_ticks)
 	if context.prey != null:
 		context.prey = context.observation_for(context.prey.handle)
+	if ai.probes.enabled:
+		ai.probes.record(Probes.Tag.REFRESH, Time.get_ticks_usec() - refresh_start)
+
 func merge_shared(context: AgentContext, sighting: LocalObservation, tick: int) -> bool:
 	# Merge only: the broker refreshes facts once after this phase's complete batch.
 	# Checking life here also makes direct callers obey the same stale-slot boundary.

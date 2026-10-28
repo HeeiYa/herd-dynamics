@@ -11,10 +11,14 @@ func _ready() -> void:
 	call_deferred("_run")
 
 func _run() -> void:
+	if _options.get("benchmark", "") == "threat":
+		await _run_threat_scan()
+		return
 	if _options.get("rendered", "0") == "1" or _options.get("benchmark", "cpu") == "frames":
 		await _run_rendered()
 		return
 	var config := SimulationConfig.new()
+	config.instrument_enabled = _options.get("instrument", "1") == "1"
 	config.cell_size = float(_options.get("cell-size", "80"))
 	config.ai_budget_usec = int(_options.get("ai-budget-usec", str(config.ai_budget_usec)))
 	var scenario := ScenarioConfig.new()
@@ -33,6 +37,7 @@ func _run() -> void:
 	for step: int in range(warmup):
 		world.ai.begin_frame()
 		world.step()
+	world.probes.reset_window()
 	var timings: Array[float] = []
 	var rows: Array[PackedStringArray] = []
 	var started: int = Time.get_ticks_usec()
@@ -50,10 +55,12 @@ func _run() -> void:
 		row.append(str(world.ai.last_decision_jobs))
 		row.append(str(world.ai.max_perception_delay_ticks))
 		row.append(str(world.ai.max_decision_delay_ticks))
+		row.append_array(world.probes.step_columns())
 		rows.append(row)
 	var wall_seconds: float = float(Time.get_ticks_usec() - started) / 1000000.0
 	timings.sort()
 	var summary: Dictionary = {
+		"instrumentation": world.probes.summary(),
 		"mode": "headless fixed-step CPU; not rendered FPS",
 		"engine": Engine.get_version_info(), "debug_build": OS.is_debug_build(),
 		"processor": OS.get_processor_name(), "logical_processors": OS.get_processor_count(),
@@ -73,12 +80,14 @@ func _run() -> void:
 		"sampling_overhead": "counts and in-memory CSV row construction included in wall time; excluded from step timer"
 	}
 	DirAccess.make_dir_recursive_absolute(output)
+	world.probes.export_jobs(output)
+	world.probes.export_queues(output)
 	var csv: FileAccess = FileAccess.open(output.path_join("steps.csv"), FileAccess.WRITE)
 	if csv == null:
 		push_error("Cannot write benchmark output: " + output)
 		get_tree().quit(1)
 		return
-	csv.store_csv_line(PackedStringArray(["tick", "step_ms", "sheep", "wolves", "dogs", "captures", "grid_candidates", "max_cell_occupancy", "commands_us", "coordination_us", "grid_us", "ai_us", "motion_us", "interaction_us", "publish_us", "perception_jobs", "decision_jobs", "max_perception_delay_ticks", "max_decision_delay_ticks"]))
+	csv.store_csv_line(PackedStringArray(["tick", "step_ms", "sheep", "wolves", "dogs", "captures", "grid_candidates", "max_cell_occupancy", "commands_us", "coordination_us", "grid_us", "ai_us", "motion_us", "interaction_us", "publish_us", "perception_jobs", "decision_jobs", "max_perception_delay_ticks", "max_decision_delay_ticks"]) + world.probes.column_names())
 	for row: PackedStringArray in rows:
 		csv.store_csv_line(row)
 	csv.close()
@@ -106,6 +115,7 @@ func _run_rendered() -> void:
 	main._reset_scenario()
 	var world: SimulationWorld = main._world
 	world.config.ai_budget_usec = int(_options.get("ai-budget-usec", str(world.config.ai_budget_usec)))
+	world.probes.enabled = _options.get("instrument", "1") == "1"
 	var runner: SimulationRunner = main._runner
 	var view: WorldPresentation = main._view
 	var warmup_seconds: float = float(_options.get("warmup-seconds", "10"))
@@ -113,6 +123,7 @@ func _run_rendered() -> void:
 	var warmup_start: int = Time.get_ticks_usec()
 	while float(Time.get_ticks_usec() - warmup_start) / 1000000.0 < warmup_seconds:
 		await RenderingServer.frame_post_draw
+	world.probes.reset_window()
 	var timings: Array[float] = []
 	var rows: Array[PackedStringArray] = []
 	var start_tick: int = world.tick
@@ -140,10 +151,12 @@ func _run_rendered() -> void:
 		])
 		for phase: int in range(runner.frame_phase_usec.size()):
 			row.append(str(runner.frame_phase_usec[phase]))
+		row.append_array(world.probes.step_columns())
 		rows.append(row)
 	var elapsed: float = float(Time.get_ticks_usec() - start_time) / 1000000.0
 	timings.sort()
 	var summary: Dictionary = {
+		"instrumentation": world.probes.summary(),
 		"mode": "rendered real scene including observer UI and sampler",
 		"engine": Engine.get_version_info(), "debug_build": OS.is_debug_build(),
 		"processor": OS.get_processor_name(), "logical_processors": OS.get_processor_count(),
@@ -168,6 +181,8 @@ func _run_rendered() -> void:
 	}
 	var output: String = _options.get("output", "user://benchmark-rendered")
 	DirAccess.make_dir_recursive_absolute(output)
+	world.probes.export_jobs(output)
+	world.probes.export_queues(output)
 	var csv: FileAccess = FileAccess.open(output.path_join("frames.csv"), FileAccess.WRITE)
 	if csv == null:
 		push_error("Cannot write rendered benchmark output: " + output)
@@ -177,7 +192,7 @@ func _run_rendered() -> void:
 		"tick", "frame_interval_ms", "runner_cpu_ms", "render_build_us", "sort_us",
 		"sheep", "wolves", "dogs", "visible", "backlog_seconds", "steps",
 		"engine_draw_calls", "commands_us", "coordination_us", "grid_us", "ai_us", "motion_us", "interaction_us", "publish_us"
-	]))
+	]) + world.probes.column_names())
 	for row: PackedStringArray in rows:
 		csv.store_csv_line(row)
 	csv.close()
@@ -192,3 +207,112 @@ func _run_rendered() -> void:
 
 func _percentile(sorted: Array[float], fraction: float) -> float:
 	return sorted[clampi(ceili(sorted.size() * fraction) - 1, 0, sorted.size() - 1)]
+
+func _run_threat_scan() -> void:
+	var output: String = _options.get("output", "user://threat-scan")
+	DirAccess.make_dir_recursive_absolute(output)
+	var results: Array[Dictionary] = []
+	for budget: int in [2000, 4000, 8000]:
+		for seed_value: int in [42, 1337, 2026]:
+			var config := SimulationConfig.new()
+			config.instrument_enabled = true
+			config.ai_budget_usec = 100000 # Fixture warm-up is identical across budget variants.
+			var scenario := ScenarioConfig.new()
+			scenario.random_seed = seed_value
+			scenario.sheep_count = 0
+			scenario.wolf_count = 0
+			scenario.dog_count = 0
+			var world := SimulationWorld.new()
+			get_tree().root.add_child(world)
+			world.setup(config, scenario)
+			var fixture_random := RandomNumberGenerator.new()
+			fixture_random.seed = seed_value
+			for index: int in int(_options.get("sheep", "80")):
+				var position := Vector2(700, 500) + Vector2(fixture_random.randf_range(-40, 40), fixture_random.randf_range(-40, 40))
+				var sheep: AgentHandle = world.create_at(SimTypes.Species.SHEEP, position)
+				world.store.hunger[world.store.resolve(sheep)] = 0.9
+			await get_tree().process_frame
+			var spawn_tick: int = int(_options.get("threat-tick", "240"))
+			for step: int in spawn_tick:
+				world.ai.begin_frame()
+				world.step()
+			var marked: Array[AgentHandle] = []
+			var rightmost: float = 0.0
+			var center := Vector2.ZERO
+			for slot: int in world.ai.contexts:
+				var context: AgentContext = world.ai.contexts[slot]
+				if context.task_name == &"graze_grass" and marked.size() < int(_options.get("threat-sheep", "20")):
+					marked.append(context.handle)
+					rightmost = maxf(rightmost, context.position().x)
+					center += context.position()
+			assert(marked.size() == int(_options.get("threat-sheep", "20")), "Threat fixture requires the requested number of calm grazers")
+			var keep_slots: Dictionary[int, bool] = {}
+			for sheep: AgentHandle in marked:
+				keep_slots[sheep.slot] = true
+			for slot: int in world.ai.contexts.keys():
+				if not keep_slots.has(slot):
+					world._remove(world.ai.contexts[slot].handle)
+			config.ai_budget_usec = budget
+			center /= float(marked.size())
+			var wolf: AgentHandle = world.create_at(SimTypes.Species.WOLF, Vector2(rightmost + 200.0, center.y))
+			# Fixture stimulus: initialize an inward search destination, then leave the
+			# normal wolf tree and movement untouched. No observer writes after this.
+			world.ai.contexts[wolf.slot].wander_destination = center
+			world.ai.contexts[wolf.slot].wander_until = world.tick + 900
+			world.probes.reset_window()
+			var visible_tick: int = -1
+			var discovered: Dictionary[int, int] = {}
+			var first_discovery: int = -1
+			var first_response: int = -1
+			var response_discovery: int = -1
+			for step: int in 900:
+				var at_tick: int = world.tick
+				var wolf_dense: int = world.store.resolve(wolf)
+				for sheep: AgentHandle in marked:
+					var dense: int = world.store.resolve(sheep)
+					if dense >= 0 and wolf_dense >= 0 and world.store.position_current[dense].distance_squared_to(world.store.position_current[wolf_dense]) <= config.perception_radius * config.perception_radius:
+						if visible_tick < 0:
+							visible_tick = at_tick
+				world.ai.begin_frame()
+				world.step()
+				for sheep: AgentHandle in marked:
+					var context: AgentContext = world.ai.contexts.get(sheep.slot)
+					if context == null or not context.handle.same_life(sheep):
+						continue
+					var observation: LocalObservation = context.observations.get(wolf.slot)
+					if observation != null and observation.handle.same_life(wolf) and observation.last_direct_tick >= spawn_tick and not discovered.has(sheep.slot):
+						discovered[sheep.slot] = observation.last_direct_tick
+						if first_discovery < 0:
+							first_discovery = observation.last_direct_tick
+					if visible_tick >= 0 and first_response < 0 and context.task_name == &"flee_threat":
+						first_response = at_tick
+						response_discovery = discovered.get(sheep.slot, -1)
+				if first_response >= 0:
+					break
+			var result: Dictionary = {"seed": seed_value, "budget_us": budget, "marked_grazing": marked.size(), "spawn_tick": spawn_tick, "geometric_visible_tick": visible_tick, "response_tick": first_response, "responding_sheep_direct_discovery_tick": response_discovery, "total_ticks": first_response - visible_tick if first_response >= 0 else -1, "first_cohort_discovery_tick": first_discovery, "discovery_ticks": first_discovery - visible_tick if first_discovery >= 0 else -1, "decision_ticks": first_response - first_discovery if first_discovery >= 0 else -1, "shared_response_without_direct_discovery": first_response >= 0 and response_discovery < 0, "censored": first_response < 0}
+			results.append(result)
+			var run_output: String = output.path_join("%d-%d" % [budget, seed_value])
+			DirAccess.make_dir_recursive_absolute(run_output)
+			world.probes.export_jobs(run_output)
+			world.probes.export_queues(run_output)
+			var run_file: FileAccess = FileAccess.open(run_output.path_join("summary.json"), FileAccess.WRITE)
+			run_file.store_string(JSON.stringify({"response": result, "instrumentation": world.probes.summary()}, "  "))
+			run_file.close()
+			world.queue_free()
+			await get_tree().process_frame
+	var json: FileAccess = FileAccess.open(output.path_join("summary.json"), FileAccess.WRITE)
+	json.store_string(JSON.stringify({"runs": results, "engine": Engine.get_version_info(), "debug_build": OS.is_debug_build(), "observer": "Read-only full scan of marked grazers before each step; observer and probes overhead included in wall time. Start is first geometric visibility, not sensing. 200 px is outside 180 px radius; wolf approaches from outside. Cohort split: first direct discovery by any marked sheep to first flee; decision segment includes local communication. Only selected calm grazers remain at stimulus; identical 100ms-budget warm-up, then switch to the swept budget."}, "  "))
+	json.close()
+	var csv: FileAccess = FileAccess.open(output.path_join("responses.csv"), FileAccess.WRITE)
+	var header := PackedStringArray()
+	for key: String in results[0]:
+		header.append(key)
+	csv.store_csv_line(header)
+	for result: Dictionary in results:
+		var row := PackedStringArray()
+		for key: String in header:
+			row.append(str(result[key]))
+		csv.store_csv_line(row)
+	csv.close()
+	print(JSON.stringify(results))
+	get_tree().quit(0)

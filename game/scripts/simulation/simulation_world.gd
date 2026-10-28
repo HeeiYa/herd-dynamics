@@ -2,6 +2,7 @@ class_name SimulationWorld
 extends Node
 ## Orchestrates stage ownership. Strategies live in the three behavior trees.
 signal captured(event: CaptureEvent)
+var probes: Probes
 var config: SimulationConfig
 var scenario: ScenarioConfig
 var store := AgentStore.new()
@@ -20,9 +21,10 @@ var _random := RandomNumberGenerator.new()
 
 func setup(settings: SimulationConfig, initial: ScenarioConfig) -> void:
 	config = settings
+	probes = Probes.new(config.instrument_enabled)
 	grid = SpatialGrid.new(config.world_size, config.cell_size)
 	resources = ResourceGrid.new(config)
-	ai = AICoordinator.new()
+	ai = AICoordinator.new(probes)
 	add_child(ai)
 	ai.setup(store, grid, resources, intents, config)
 	motion = MotionSystem.new()
@@ -123,6 +125,9 @@ func step() -> void:
 	store.publish_motion()
 	tick += 1
 	phase_usec[6] = Time.get_ticks_usec() - started
+	if probes.enabled:
+		ai.sample_pending(tick - 1)
+		probes.end_step()
 
 func counts() -> PackedInt32Array:
 	var result := PackedInt32Array([0, 0, 0])

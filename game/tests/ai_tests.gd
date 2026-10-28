@@ -32,6 +32,7 @@ func _check(condition: bool, description: String) -> void:
 		push_error(description)
 
 func _run() -> void:
+	_test_probes()
 	_test_coordination()
 	await _test_local_knowledge()
 	await _test_shared_batch()
@@ -386,3 +387,18 @@ func _test_cross_step_urgent_fairness() -> void:
 	_check(ai.contexts[urgent.slot].last_decision_tick == 4, "Urgent quota survives eight separate frame-budget resets")
 	ai.queue_free()
 	await process_frame
+
+func _test_probes() -> void:
+	var probes := Probes.new(true)
+	for index: int in 4100:
+		probes.begin_step(index)
+		probes.record(Probes.Tag.DECISION, 8)
+		probes.job(Probes.Tag.DECISION, SimTypes.Species.WOLF, 8, 0, 3, Probes.Task.HUNT, 12)
+		probes.count_job(Probes.Counter.DECISION_SERVED)
+		probes.end_step()
+	var group: int = SimTypes.Species.WOLF * Probes.Tag.size() + Probes.Tag.DECISION
+	_check(probes.counts[Probes.Tag.DECISION] == 4100 and probes.sums[Probes.Tag.DECISION] == 32800 and probes.maxima[Probes.Tag.DECISION] == 8, "Probe aggregates include records overwritten in the bounded ring")
+	_check(probes.histogram[group * 64 + 4] == 4100 and probes.job_counts[group] == 4100, "Power-of-two histogram boundary retains the complete job distribution")
+	_check(probes.ring.size() == 4096 * 8 and probes.ring[0] == 4096 and probes.queue_ring.size() == 4096 * 14, "Job and queue rings wrap without capacity growth")
+	probes.reset_window()
+	_check(probes.written == 0 and probes.queue_written == 0 and probes.counts[Probes.Tag.DECISION] == 0 and probes.ring[0] == 4096, "Window reset clears aggregates and cursors but reuses ring storage")

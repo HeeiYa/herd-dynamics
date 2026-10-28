@@ -3,6 +3,7 @@ extends Node
 enum Stage { PERCEPTION, DECISION }
 ## Public AI boundary. Time buckets enqueue once; FIFO queues retain deferred work.
 ## One shared render-frame wall-clock budget covers all fixed-step catch-up calls.
+var probes: Probes
 var store: AgentStore
 var grid: SpatialGrid
 var resources: ResourceGrid
@@ -33,6 +34,9 @@ var _urgent_head: int = 0
 # These fairness cursors survive both fixed-step and render-frame boundaries.
 var _next_stage: Stage = Stage.PERCEPTION
 var _decision_dispatch_count: int = 0
+
+func _init(instrumentation: Probes = null) -> void:
+	probes = instrumentation if instrumentation != null else Probes.new()
 
 func setup(agent_store: AgentStore, spatial_grid: SpatialGrid, resource_grid: ResourceGrid, intent_buffer: IntentBuffer, simulation_config: SimulationConfig) -> void:
 	store = agent_store
@@ -131,10 +135,14 @@ func begin_frame() -> void:
 	frame_used_usec = 0
 
 func begin_step(tick: int) -> void:
+	if probes.enabled:
+		probes.begin_step(tick)
 	current_tick = tick
 	var started: int = Time.get_ticks_usec()
 	coordination.begin_step(tick)
 	knowledge.deliver(self, tick)
+	if probes.enabled:
+		probes.record(Probes.Tag.BEGIN_STEP, Time.get_ticks_usec() - started)
 	frame_used_usec += Time.get_ticks_usec() - started
 
 func step(tick: int) -> void:
@@ -143,6 +151,8 @@ func step(tick: int) -> void:
 	last_decision_jobs = 0
 	var started: int = Time.get_ticks_usec()
 	_enqueue_due(tick)
+	if probes.enabled:
+		probes.record(Probes.Tag.ENQUEUE, Time.get_ticks_usec() - started)
 	# A costly final job leaves the other stage first in line on the next step.
 	while _has_work() and _budget_available(started):
 		if not _run_next_job(tick):
@@ -151,6 +161,8 @@ func step(tick: int) -> void:
 	frame_used_usec += Time.get_ticks_usec() - started
 	if _has_work() and frame_used_usec >= config.ai_budget_usec:
 		budget_exhaustions += 1
+		if probes.enabled:
+			probes.count_job(Probes.Counter.BUDGET_EXHAUSTED)
 
 func _run_next_job(tick: int) -> bool:
 	var preferred: Stage = _next_stage
@@ -222,13 +234,24 @@ func _run_perception(tick: int) -> bool:
 		_perception_head += 1
 		var context: AgentContext = _context(handle)
 		if context == null or not context.perception_queued:
+			if probes.enabled:
+				probes.count_job(Probes.Counter.PERCEPTION_STALE)
 			continue
 		context.current_tick = tick
 		context.perception_queued = false
 		max_perception_delay_ticks = maxi(max_perception_delay_ticks, tick - context.next_perception_tick)
 		var was_alert: bool = context.is_alert()
+		var job_start: int = Time.get_ticks_usec() if probes.enabled else 0
+		var candidates_before: int = grid.candidate_count
 		perception.update(context, tick)
+		var publish_start: int = Time.get_ticks_usec() if probes.enabled else 0
 		knowledge.publish(context)
+		if probes.enabled:
+			probes.record(Probes.Tag.PUBLISH, Time.get_ticks_usec() - publish_start)
+			var elapsed_us: int = Time.get_ticks_usec() - job_start
+			probes.record(Probes.Tag.PERCEPTION_JOB, elapsed_us)
+			probes.job(Probes.Tag.PERCEPTION_JOB, context.species, elapsed_us, grid.candidate_count - candidates_before, context.observations.size())
+			probes.count_job(Probes.Counter.PERCEPTION_SERVED)
 		if was_alert != context.is_alert():
 			_request_urgent(context, tick)
 		var interval: int = settings.alert_perception_ticks if context.is_alert() else settings.calm_perception_ticks
@@ -251,6 +274,8 @@ func _run_decision(tick: int) -> bool:
 			_decision_head += 1
 		var context: AgentContext = _context(handle)
 		if context == null or not context.decision_queued:
+			if probes.enabled:
+				probes.count_job(Probes.Counter.URGENT_STALE if urgent else Probes.Counter.DECISION_STALE)
 			continue
 		if not urgent and context.urgent_queued:
 			continue
@@ -260,7 +285,15 @@ func _run_decision(tick: int) -> bool:
 		max_decision_delay_ticks = maxi(max_decision_delay_ticks, tick - context.next_decision_tick)
 		if context.player.get_bt_instance() != null:
 			var elapsed: float = float(maxi(1, tick - context.last_decision_tick)) * config.fixed_dt
+			var update_start: int = Time.get_ticks_usec() if probes.enabled else 0
 			context.player.update(elapsed)
+			if probes.enabled:
+				var elapsed_us: int = Time.get_ticks_usec() - update_start
+				probes.record(Probes.Tag.DECISION, elapsed_us)
+				probes.job(Probes.Tag.DECISION, context.species, elapsed_us, 0, context.observations.size(), probes.task_names.find(context.task_name), tick - context.last_decision_tick)
+				probes.count_job(Probes.Counter.DECISION_SERVED)
+				if urgent:
+					probes.count_job(Probes.Counter.URGENT_SERVED)
 		context.last_decision_tick = tick
 		var interval: int = settings.alert_decision_ticks if context.is_alert() else settings.calm_decision_ticks
 		_schedule_decision(context, tick + interval)
@@ -306,3 +339,16 @@ func describe(handle: AgentHandle, tick: int) -> String:
 	return "task=%s | sight age=%dt | lease=%s\nnext perception=%d decision=%d | memory=%d" % [context.task_name, tick - context.last_perception_tick, lease_text, context.next_perception_tick, context.next_decision_tick, context.observations.size()]
 func wake_for_observation(context: AgentContext, tick: int) -> void:
 	_request_urgent(context, tick)
+
+func sample_pending(tick: int) -> void:
+	probes.queues.fill(0)
+	# Read-only scan of live queued contexts; stale physical entries are excluded.
+	for slot: int in contexts:
+		var context: AgentContext = contexts[slot]
+		if context.perception_queued:
+			probes.queues[0] += 1
+			probes.queues[3] = maxi(probes.queues[3], tick - context.next_perception_tick)
+		if context.decision_queued:
+			var category: int = 2 if context.urgent_queued else 1
+			probes.queues[category] += 1
+			probes.queues[category + 3] = maxi(probes.queues[category + 3], tick - context.next_decision_tick)
