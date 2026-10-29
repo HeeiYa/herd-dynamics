@@ -1,6 +1,6 @@
 class_name BenchmarkSession
 extends Node
-## Two explicit modes: headless fixed-step CPU throughput and the actual rendered scene.
+## Explicit CPU, rendered-scene and response measurements share the production kernel.
 var _options: Dictionary[String, String] = {}
 
 func _ready() -> void:
@@ -11,6 +11,11 @@ func _ready() -> void:
 	call_deferred("_run")
 
 func _run() -> void:
+	if _options.get("benchmark", "") == "threat-cohort":
+		var cohort_benchmark := preload("res://scripts/diagnostics/threat_cohort_benchmark.gd").new()
+		var exit_code: int = await cohort_benchmark.run(self, _options)
+		get_tree().quit(exit_code)
+		return
 	if _options.get("benchmark", "") == "threat":
 		await _run_threat_scan()
 		return
@@ -19,6 +24,8 @@ func _run() -> void:
 		return
 	var config := SimulationConfig.new()
 	config.instrument_enabled = _options.get("instrument", "1") == "1"
+	config.compact_flock_knowledge = _options.get("compact-flock", "1") == "1"
+	_configure_backends(config)
 	config.cell_size = float(_options.get("cell-size", "80"))
 	config.ai_budget_usec = int(_options.get("ai-budget-usec", str(config.ai_budget_usec)))
 	var scenario := ScenarioConfig.new()
@@ -56,11 +63,16 @@ func _run() -> void:
 		row.append(str(world.ai.max_perception_delay_ticks))
 		row.append(str(world.ai.max_decision_delay_ticks))
 		row.append_array(world.probes.step_columns())
+		row.append_array(_activity_columns(world))
 		rows.append(row)
 	var wall_seconds: float = float(Time.get_ticks_usec() - started) / 1000000.0
 	timings.sort()
 	var summary: Dictionary = {
 		"instrumentation": world.probes.summary(),
+		"compact_flock_knowledge": world.config.compact_flock_knowledge,
+		"shared_cell_candidates": world.config.shared_cell_candidates,
+		"crowd_motion_enabled": world.config.crowd_motion_enabled,
+		"retained_observations_by_species": Array(world.ai.knowledge_observation_counts()),
 		"mode": "headless fixed-step CPU; not rendered FPS",
 		"engine": Engine.get_version_info(), "debug_build": OS.is_debug_build(),
 		"processor": OS.get_processor_name(), "logical_processors": OS.get_processor_count(),
@@ -87,7 +99,7 @@ func _run() -> void:
 		push_error("Cannot write benchmark output: " + output)
 		get_tree().quit(1)
 		return
-	csv.store_csv_line(PackedStringArray(["tick", "step_ms", "sheep", "wolves", "dogs", "captures", "grid_candidates", "max_cell_occupancy", "commands_us", "coordination_us", "grid_us", "ai_us", "motion_us", "interaction_us", "publish_us", "perception_jobs", "decision_jobs", "max_perception_delay_ticks", "max_decision_delay_ticks"]) + world.probes.column_names())
+	csv.store_csv_line(PackedStringArray(["tick", "step_ms", "sheep", "wolves", "dogs", "captures", "grid_candidates", "max_cell_occupancy", "commands_us", "coordination_us", "grid_us", "ai_us", "motion_us", "interaction_us", "publish_us", "perception_jobs", "decision_jobs", "max_perception_delay_ticks", "max_decision_delay_ticks"]) + world.probes.column_names() + _activity_names())
 	for row: PackedStringArray in rows:
 		csv.store_csv_line(row)
 	csv.close()
@@ -113,9 +125,14 @@ func _run_rendered() -> void:
 	main._dogs.value = int(_options.get("dogs", str(main._world.scenario.dog_count)))
 	main._layout.select(int(_options.get("layout", "0")))
 	main._reset_scenario()
+	main._zoom = float(_options.get("view-scale", str(main._zoom)))
+	main._fit_camera()
 	var world: SimulationWorld = main._world
 	world.config.ai_budget_usec = int(_options.get("ai-budget-usec", str(world.config.ai_budget_usec)))
+	world.config.compact_flock_knowledge = _options.get("compact-flock", "1") == "1"
+	_configure_backends(world.config)
 	world.probes.enabled = _options.get("instrument", "1") == "1"
+	world.config.instrument_enabled = world.probes.enabled
 	var runner: SimulationRunner = main._runner
 	var view: WorldPresentation = main._view
 	var warmup_seconds: float = float(_options.get("warmup-seconds", "10"))
@@ -152,11 +169,17 @@ func _run_rendered() -> void:
 		for phase: int in range(runner.frame_phase_usec.size()):
 			row.append(str(runner.frame_phase_usec[phase]))
 		row.append_array(world.probes.step_columns())
+		row.append_array(_activity_columns(world))
 		rows.append(row)
 	var elapsed: float = float(Time.get_ticks_usec() - start_time) / 1000000.0
 	timings.sort()
 	var summary: Dictionary = {
 		"instrumentation": world.probes.summary(),
+		"compact_flock_knowledge": world.config.compact_flock_knowledge,
+		"shared_cell_candidates": world.config.shared_cell_candidates,
+		"crowd_motion_enabled": world.config.crowd_motion_enabled,
+		"activity_sampling": "Cache and activity columns are last-published-step snapshots, not totals across catch-up steps. moved counts require >0.01 pixel actual displacement.",
+		"retained_observations_by_species": Array(world.ai.knowledge_observation_counts()),
 		"mode": "rendered real scene including observer UI and sampler",
 		"engine": Engine.get_version_info(), "debug_build": OS.is_debug_build(),
 		"processor": OS.get_processor_name(), "logical_processors": OS.get_processor_count(),
@@ -192,7 +215,7 @@ func _run_rendered() -> void:
 		"tick", "frame_interval_ms", "runner_cpu_ms", "render_build_us", "sort_us",
 		"sheep", "wolves", "dogs", "visible", "backlog_seconds", "steps",
 		"engine_draw_calls", "commands_us", "coordination_us", "grid_us", "ai_us", "motion_us", "interaction_us", "publish_us"
-	]) + world.probes.column_names())
+	]) + world.probes.column_names() + _activity_names())
 	for row: PackedStringArray in rows:
 		csv.store_csv_line(row)
 	csv.close()
@@ -208,6 +231,35 @@ func _run_rendered() -> void:
 func _percentile(sorted: Array[float], fraction: float) -> float:
 	return sorted[clampi(ceili(sorted.size() * fraction) - 1, 0, sorted.size() - 1)]
 
+func _configure_backends(config: SimulationConfig) -> void:
+	config.shared_cell_candidates = _options.get("shared-candidates", str(int(config.shared_cell_candidates))) == "1"
+	config.crowd_motion_enabled = _options.get("crowd-field", str(int(config.crowd_motion_enabled))) == "1"
+
+func _activity_names() -> PackedStringArray:
+	return PackedStringArray([
+		"shared_hits_last_step", "shared_builds_last_step", "shared_fallbacks_last_step", "shared_candidates_last_step", "shared_filter_visits_last_step",
+		"moved_sheep_last_step", "moved_wolves_last_step", "moved_dogs_last_step", "displacement_pixels_last_step",
+		"field_build_us_last_step", "field_sample_us_last_step", "exact_sample_us_last_step",
+		"field_agents_last_step", "exact_agents_last_step", "field_cell_visits_last_step", "exact_candidates_last_step", "exact_neighbors_last_step", "aggregate_contributions_last_step"
+	])
+
+func _activity_columns(world: SimulationWorld) -> PackedStringArray:
+	var moved := PackedInt32Array([0, 0, 0])
+	var displacement: float = 0.0
+	for dense: int in world.store.count:
+		if world.store.alive[dense] == 0:
+			continue
+		var distance: float = world.store.position_previous[dense].distance_to(world.store.position_current[dense])
+		if distance > 0.01:
+			moved[world.store.species[dense]] += 1
+		displacement += distance
+	return PackedStringArray([
+		str(world.grid.shared_hits), str(world.grid.shared_builds), str(world.grid.shared_fallbacks), str(world.grid.shared_candidate_references), str(world.grid.shared_filter_visits),
+		str(moved[0]), str(moved[1]), str(moved[2]), str(displacement),
+		str(world.motion.field_build_usec), str(world.motion.field_sample_usec), str(world.motion.exact_sample_usec),
+		str(world.motion.field_agent_count), str(world.motion.exact_agent_count), str(world.motion.field_cell_visits), str(world.motion.exact_candidate_visits), str(world.motion.exact_neighbor_visits), str(world.motion.aggregate_agent_contributions)
+	])
+
 func _run_threat_scan() -> void:
 	var output: String = _options.get("output", "user://threat-scan")
 	DirAccess.make_dir_recursive_absolute(output)
@@ -216,6 +268,8 @@ func _run_threat_scan() -> void:
 		for seed_value: int in [42, 1337, 2026]:
 			var config := SimulationConfig.new()
 			config.instrument_enabled = true
+			config.compact_flock_knowledge = _options.get("compact-flock", "1") == "1"
+			_configure_backends(config)
 			config.ai_budget_usec = 100000 # Fixture warm-up is identical across budget variants.
 			var scenario := ScenarioConfig.new()
 			scenario.random_seed = seed_value
@@ -289,7 +343,24 @@ func _run_threat_scan() -> void:
 						response_discovery = discovered.get(sheep.slot, -1)
 				if first_response >= 0:
 					break
-			var result: Dictionary = {"seed": seed_value, "budget_us": budget, "marked_grazing": marked.size(), "spawn_tick": spawn_tick, "geometric_visible_tick": visible_tick, "response_tick": first_response, "responding_sheep_direct_discovery_tick": response_discovery, "total_ticks": first_response - visible_tick if first_response >= 0 else -1, "first_cohort_discovery_tick": first_discovery, "discovery_ticks": first_discovery - visible_tick if first_discovery >= 0 else -1, "decision_ticks": first_response - first_discovery if first_discovery >= 0 else -1, "shared_response_without_direct_discovery": first_response >= 0 and response_discovery < 0, "censored": first_response < 0}
+			var result: Dictionary = {
+				"seed": seed_value,
+				"budget_us": budget,
+				"compact_flock_knowledge": config.compact_flock_knowledge,
+				"shared_cell_candidates": config.shared_cell_candidates,
+				"crowd_motion_enabled": config.crowd_motion_enabled,
+				"marked_grazing": marked.size(),
+				"spawn_tick": spawn_tick,
+				"geometric_visible_tick": visible_tick,
+				"response_tick": first_response,
+				"responding_sheep_direct_discovery_tick": response_discovery,
+				"total_ticks": first_response - visible_tick if first_response >= 0 else -1,
+				"first_cohort_discovery_tick": first_discovery,
+				"discovery_ticks": first_discovery - visible_tick if first_discovery >= 0 else -1,
+				"decision_ticks": first_response - first_discovery if first_discovery >= 0 else -1,
+				"shared_response_without_direct_discovery": first_response >= 0 and response_discovery < 0,
+				"censored": first_response < 0,
+			}
 			results.append(result)
 			var run_output: String = output.path_join("%d-%d" % [budget, seed_value])
 			DirAccess.make_dir_recursive_absolute(run_output)

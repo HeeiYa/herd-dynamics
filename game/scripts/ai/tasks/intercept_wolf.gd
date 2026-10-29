@@ -2,8 +2,12 @@ extends "res://scripts/ai/tasks/context_action.gd"
 
 func _tick(_delta: float) -> Status:
 	var ai: AICoordinator = context.coordinator
+	if context.flock_count <= 0 or context.returning_to_flock:
+		return FAILURE
 	var threat: LocalObservation = _choose_unreserved_threat()
 	if threat == null:
+		return FAILURE
+	if ai.coordination.request_status(context.handle, threat.handle, token, context.current_tick) == CoordinationSystem.RequestStatus.REJECTED:
 		return FAILURE
 	ai.coordination.request(context.handle, threat.handle, CoordinationSystem.Kind.DEFEND, token, context.position(), context.current_tick)
 	var lease: CoordinationSystem.Lease = ai.coordination.get_lease(context.handle, context.current_tick)
@@ -14,9 +18,7 @@ func _tick(_delta: float) -> Status:
 	if context.pursuit_until == 0:
 		context.pursuit_until = context.current_tick + ai.settings.dog_intercept_ticks
 	var destination: Vector2 = threat.predicted_position(context.current_tick, ai.config.fixed_dt, ai.settings)
-	# Lead the last observation, while staying in the local flock's leash.
-	var lead: Vector2 = (threat.velocity * ai.settings.prediction_seconds).limit_length(ai.settings.max_prediction_distance)
-	destination += lead
+	# Prediction is already bounded; do not add a second lead to old knowledge.
 	destination = context.protection_anchor + (destination - context.protection_anchor).limit_length(ai.config.dog_leash_radius)
 	write_intent(SimTypes.IntentMode.PRESSURE, SimTypes.Behavior.INTERCEPT, destination, ai.settings.dog_speed, "Assigned threat near local flock; bounded prediction", threat.handle)
 	return RUNNING

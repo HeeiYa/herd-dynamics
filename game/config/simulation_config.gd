@@ -2,6 +2,15 @@ class_name SimulationConfig
 extends Resource
 ## Durations ending in _ticks use the single fixed simulation clock.
 @export var instrument_enabled: bool = false
+# Keep exact target memories; represent passive flock knowledge as a local sample.
+@export var compact_flock_knowledge: bool = true
+# Candidate sharing remains an experiment; local crowd steering is the measured
+# default. Either switch can be disabled independently for same-kernel comparisons.
+@export var shared_cell_candidates: bool = false
+@export var crowd_motion_enabled: bool = true
+@export var crowd_cell_size: float = 32.0
+@export var crowd_enter_count: int = 24
+@export var crowd_exit_count: int = 16
 @export var fixed_dt: float = 1.0 / 60.0
 @export var world_size: Vector2 = Vector2(1600.0, 1000.0)
 @export var cell_size: float = 80.0
@@ -33,7 +42,6 @@ extends Resource
 @export var alignment_weight: float = 0.2
 @export var cohesion_weight: float = 0.18
 @export var facing_min_speed: float = 2.0
-@export var grazing_distance: float = 24.0
 @export var capture_nutrition: float = 0.8
 
 @export var agent_radius: float = 13.0

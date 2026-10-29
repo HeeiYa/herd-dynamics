@@ -183,7 +183,7 @@ func _collect_grazing_demand(dense: int, tick: int, dt: float) -> void:
 	var cell: int = intent.resource_cell
 	if cell < 0 or cell >= _resources.cell_count:
 		return
-	if _store.position_next[dense].distance_squared_to(_resources.cell_center(cell)) > _config.grazing_distance * _config.grazing_distance:
+	if not _resources.can_graze_at(cell, _store.position_next[dense]):
 		return
 	var requested: float = minf(_store.hunger[dense], maxf(0.0, _config.grazing_rate * dt))
 	if requested <= 0.0:
@@ -227,4 +227,3 @@ func reset() -> void:
 	captures.clear()
 	_grazed_cells.clear()
 	grass_consumed = 0.0
-

@@ -11,6 +11,7 @@ class Message extends RefCounted:
 var pending: Array[Message] = []
 # Lifecycle changes happen outside delivery; slot keys deduplicate validated lives.
 var _changed_recipients: Dictionary[int, AgentContext] = {}
+var _visible_peers: Array[AgentHandle] = []
 
 func publish(context: AgentContext) -> void:
 	var ai: AICoordinator = context.coordinator
@@ -30,6 +31,15 @@ func publish(context: AgentContext) -> void:
 			report = sighting
 	if report == null:
 		return
+	if ai.config.compact_flock_knowledge:
+		# Communication validates current geometry; aggregate flock knowledge is
+		# not evidence that any remembered peer can still receive this report.
+		var share_radius: float = minf(ai.config.perception_radius, ai.settings.cooperation_radius)
+		ai.grid.query_peers(origin, share_radius, context.species, ai.store, _visible_peers, ai.settings.max_share_recipients, context.handle)
+		for recipient: AgentHandle in _visible_peers:
+			_send(context, recipient, report)
+		_visible_peers.clear()
+		return
 	var recipients: int = 0
 	for slot: int in context.observations:
 		var ally: LocalObservation = context.observations[slot]
@@ -37,15 +47,18 @@ func publish(context: AgentContext) -> void:
 			continue
 		if origin.distance_to(ally.position) > ai.settings.cooperation_radius:
 			continue
-		var message := Message.new()
-		message.sender = context.handle
-		message.recipient = ally.handle
-		message.sighting = report.copy_sighting()
-		message.delivery_tick = context.current_tick + 1
-		pending.append(message)
+		_send(context, ally.handle, report)
 		recipients += 1
 		if recipients >= ai.settings.max_share_recipients:
 			break
+
+func _send(context: AgentContext, recipient: AgentHandle, report: LocalObservation) -> void:
+	var message := Message.new()
+	message.sender = context.handle
+	message.recipient = recipient
+	message.sighting = report.copy_sighting()
+	message.delivery_tick = context.current_tick + 1
+	pending.append(message)
 
 func deliver(ai: AICoordinator, tick: int) -> void:
 	var merge_start: int = Time.get_ticks_usec() if ai.probes.enabled else 0
@@ -86,3 +99,4 @@ func remove(handle: AgentHandle) -> void:
 func clear() -> void:
 	pending.clear()
 	_changed_recipients.clear()
+	_visible_peers.clear()

@@ -19,7 +19,7 @@ var _layout: OptionButton
 func _ready() -> void:
 	if not has_meta("benchmark_view"):
 		for argument: String in OS.get_cmdline_user_args():
-			if argument in ["--benchmark=cpu", "--benchmark=frames", "--benchmark=threat"]:
+			if argument in ["--benchmark=cpu", "--benchmark=frames", "--benchmark=threat", "--benchmark=threat-cohort"]:
 				get_tree().root.add_child.call_deferred(BenchmarkSession.new())
 				queue_free()
 				return

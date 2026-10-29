@@ -21,10 +21,16 @@ func _run() -> void:
 	_test_shared_species_replacement()
 	_test_direct_cache_invalidation()
 	_test_clear_runtime_cache()
+	_test_compact_target_storage()
+	_test_compact_sample_lifetime()
+	_test_compact_sample_replacement()
+	_test_compact_wolf_memory()
 	print("PERCEPTION_TESTS checks=%d failures=%d" % [_checks, _failures])
 	quit(0 if _failures == 0 else 1)
 
-func _make_context(ai: AICoordinator, kind: int, position: Vector2, tick: int) -> AgentContext:
+func _make_context(ai: AICoordinator, kind: int, position: Vector2, tick: int, compact: bool = false) -> AgentContext:
+	# The small-snapshot oracle describes the legacy individual-memory policy.
+	ai.config.compact_flock_knowledge = compact
 	var context := AgentContext.new()
 	context.coordinator = ai
 	context.species = kind
@@ -335,9 +341,144 @@ func _test_clear_runtime_cache() -> void:
 	_check(context.remembered_flock_sum == Vector2.ZERO and context.remembered_flock_count == 0, "Clearing context removes the retained flock summary")
 	_check(context.flock_cache_dirty and context.flock_cache_expires_tick == 0 and context.fact_cache_life_revision == -1, "Clearing context resets cache validity boundaries")
 	_check(context.threat_view_dirty and context.threat_observations.is_empty() and context.threat_view_indices.is_empty(), "Clearing context releases ordered threat references")
+	_check(context.facts_dirty and context.facts_expire_tick == 0, "Clearing context invalidates decision facts")
 	_compare_refresh(perception, context)
 	_check(context.flock_count == 1 and context.threat == null, "A reused empty context retains no prior knowledge")
 	context.free()
+	ai.free()
+
+func _compact_ai() -> AICoordinator:
+	var ai := AICoordinator.new()
+	ai.store = AgentStore.new()
+	ai.config = SimulationConfig.new()
+	ai.config.compact_flock_knowledge = true
+	ai.config.perception_radius = 180.0
+	ai.config.memory_ticks = 120
+	ai.grid = SpatialGrid.new()
+	return ai
+
+func _test_compact_target_storage() -> void:
+	var ai: AICoordinator = _compact_ai()
+	var perception := PerceptionSystem.new()
+	var sheep: AgentContext = _make_context(ai, SimTypes.Species.SHEEP, Vector2(500, 500), 100, true)
+	var dog: AgentContext = _make_context(ai, SimTypes.Species.DOG, Vector2(510, 500), 100, true)
+	var wolf: AgentContext = _make_context(ai, SimTypes.Species.WOLF, Vector2(520, 500), 100, true)
+	for index: int in 80:
+		ai.store.create_agent(SimTypes.Species.SHEEP, Vector2(530 + index % 10, 480 + index / 10))
+	ai.store.create_agent(SimTypes.Species.WOLF, Vector2(540, 500))
+	ai.store.create_agent(SimTypes.Species.DOG, Vector2(550, 500))
+	ai.grid.rebuild(ai.store)
+	perception.update(sheep, 100)
+	perception.update(dog, 100)
+	perception.update(wolf, 100)
+	_check(sheep.observations.size() == 2 and dog.observations.size() == 2, "Dense sheep and dog knowledge retains exact wolf targets only")
+	_check(sheep.flock_count == 81 and dog.flock_count == 81, "Compact flock statistics include the sheep observer exactly once")
+	_check(wolf.observations.size() == 83 and wolf.flock_count == 81, "Wolf keeps individual sheep and dog knowledge without packmate copies")
+	_check(sheep.last_perception_tick == 100 and dog.last_perception_tick == 100 and wolf.last_perception_tick == 100, "Target scans retain one direct visibility timestamp")
+	for sighting: LocalObservation in sheep.observations.values():
+		_check(sighting.species == SimTypes.Species.WOLF, "Sheep target knowledge excludes flock identities")
+	for sighting: LocalObservation in wolf.observations.values():
+		_check(sighting.species != SimTypes.Species.WOLF and sighting.last_direct_tick == 100, "Wolf action targets retain direct provenance")
+	sheep.free()
+	dog.free()
+	wolf.free()
+	ai.free()
+
+func _test_compact_sample_lifetime() -> void:
+	var ai: AICoordinator = _compact_ai()
+	var perception := PerceptionSystem.new()
+	var sheep: AgentContext = _make_context(ai, SimTypes.Species.SHEEP, Vector2(500, 500), 100, true)
+	var dog: AgentContext = _make_context(ai, SimTypes.Species.DOG, Vector2(500, 520), 100, true)
+	var companion: AgentHandle = ai.store.create_agent(SimTypes.Species.SHEEP, Vector2(600, 500))
+	var attacker: AgentHandle = ai.store.create_agent(SimTypes.Species.WOLF, Vector2(530, 500))
+	ai.grid.rebuild(ai.store)
+	perception.update(sheep, 100)
+	perception.update(dog, 100)
+	_check(sheep.flock_sample_center == Vector2(550, 500) and dog.protection_anchor == Vector2(500, 500), "Sheep retain the whole local center while the dog selects one occupied visible region")
+	ai.store.position_current[ai.store.resolve(sheep.handle)] = Vector2(510, 500)
+	ai.store.position_current[ai.store.resolve(companion)] = Vector2(1400, 900)
+	var candidates_before: int = ai.grid.candidate_count
+	var merges_before: int = ai.grid.aggregated_cell_count
+	perception.prepare_decision(sheep, 101)
+	_check(sheep.flock_center == Vector2(550, 500), "Observer and hidden member movement cannot rewrite a live historical sample")
+	ai.store.mark_dead(companion)
+	perception.prepare_decision(sheep, 102)
+	_check(sheep.flock_count == 2 and sheep.flock_center == Vector2(550, 500), "A lifecycle revision does not resample hidden flock membership")
+	var report: LocalObservation = sheep.observations[attacker.slot].copy_sighting()
+	report.observed_tick = 110
+	report.expires_tick = 230
+	report.position = Vector2(540, 500)
+	_check(perception.merge_shared(sheep, report, 110), "Compact threat sharing updates exact target evidence")
+	perception.refresh_shared_facts(sheep, 110)
+	_check(sheep.flock_sample_observed_tick == 100 and sheep.flock_sample_expires_tick == 220, "Threat sharing cannot extend or rewrite the flock sample lifetime")
+	perception.prepare_decision(sheep, 219)
+	_check(sheep.flock_count == 2, "The flock sample remains usable immediately before its deadline")
+	perception.prepare_decision(sheep, 220)
+	perception.prepare_decision(dog, 220)
+	_check(sheep.flock_count == 1 and sheep.flock_center == Vector2(510, 500), "At exact expiry a sheep knows only its own current position")
+	_check(dog.flock_count == 0 and dog.protection_anchor == Vector2(500, 500), "At exact expiry a dog retains its last protection anchor without a live flock count")
+	_check(sheep.threat == report and sheep.last_perception_tick == 100, "Flock expiry preserves independently valid threat knowledge and its scan marker")
+	ai.store.position_current[ai.store.resolve(sheep.handle)] = Vector2(515, 500)
+	perception.prepare_decision(sheep, 221)
+	_check(sheep.flock_center == Vector2(515, 500), "An expired sheep sample follows only the observer on subsequent decisions")
+	_check(ai.grid.candidate_count == candidates_before and ai.grid.aggregated_cell_count == merges_before, "Decision freshness and shared evidence perform no spatial queries")
+	sheep.clear_runtime()
+	_check(sheep.flock_sample_count == 0 and sheep.flock_sample_center == Vector2.ZERO and sheep.flock_sample_observed_tick == -1 and sheep.flock_sample_expires_tick == 0, "Runtime recycling clears every flock sample field")
+	sheep.free()
+	dog.free()
+	ai.free()
+
+func _test_compact_sample_replacement() -> void:
+	var ai: AICoordinator = _compact_ai()
+	var perception := PerceptionSystem.new()
+	var near_sheep: AgentContext = _make_context(ai, SimTypes.Species.SHEEP, Vector2(500, 500), 100, true)
+	var far_sheep: AgentContext = _make_context(ai, SimTypes.Species.SHEEP, Vector2(1100, 500), 100, true)
+	var companion: AgentHandle = ai.store.create_agent(SimTypes.Species.SHEEP, Vector2(600, 500))
+	ai.grid.rebuild(ai.store)
+	perception.update(near_sheep, 100)
+	perception.update(far_sheep, 100)
+	_check(near_sheep.flock_sample_count == 2 and near_sheep.flock_sample_center == Vector2(550, 500), "A second observer cannot mutate the first observer's copied sample")
+	_check(far_sheep.flock_sample_count == 1 and far_sheep.flock_sample_center == Vector2(1100, 500), "Each observer owns its own local flock sample")
+	ai.store.position_current[ai.store.resolve(companion)] = Vector2(1150, 500)
+	ai.grid.rebuild(ai.store)
+	perception.update(near_sheep, 101)
+	_check(near_sheep.flock_count == 1 and near_sheep.flock_center == Vector2(500, 500), "A new scan replaces the whole flock sample instead of merging past members")
+	_check(far_sheep.flock_sample_count == 1 and far_sheep.flock_sample_observed_tick == 100, "Other observers keep their prior sample until they scan")
+	var unsupported := LocalObservation.new()
+	unsupported.handle = companion
+	unsupported.species = SimTypes.Species.SHEEP
+	unsupported.position = Vector2(600, 500)
+	unsupported.observed_tick = 101
+	unsupported.expires_tick = 221
+	_check(not perception.merge_shared(near_sheep, unsupported, 101) and near_sheep.observations.is_empty(), "Compact flock reports cannot rebuild individual companion memories")
+	near_sheep.free()
+	far_sheep.free()
+	ai.free()
+
+func _test_compact_wolf_memory() -> void:
+	var ai: AICoordinator = _compact_ai()
+	var perception := PerceptionSystem.new()
+	var wolf: AgentContext = _make_context(ai, SimTypes.Species.WOLF, Vector2(500, 500), 100, true)
+	var sheep: AgentHandle = ai.store.create_agent(SimTypes.Species.SHEEP, Vector2(550, 500))
+	ai.store.create_agent(SimTypes.Species.DOG, Vector2(530, 500))
+	ai.grid.rebuild(ai.store)
+	perception.update(wolf, 100)
+	var prey: LocalObservation = wolf.observations[sheep.slot]
+	wolf.prey = prey
+	ai.store.position_current[ai.store.resolve(sheep)] = Vector2(1300, 900)
+	ai.grid.rebuild(ai.store)
+	perception.update(wolf, 101)
+	_check(wolf.prey == prey and wolf.flock_center == Vector2(550, 500) and wolf.flock_count == 1, "Wolf retains exact remembered prey after it leaves current sight")
+	var report: LocalObservation = prey.copy_sighting()
+	report.observed_tick = 102
+	report.expires_tick = 222
+	report.position = Vector2(600, 500)
+	_check(perception.merge_shared(wolf, report, 102), "Compact wolves continue accepting shared prey identities")
+	perception.prepare_decision(wolf, 102)
+	_check(wolf.prey == report and wolf.flock_center == Vector2(600, 500) and report.last_direct_tick == 100, "Shared prey refreshes wolf facts without revealing hidden current positions")
+	perception.prepare_decision(wolf, 222)
+	_check(wolf.prey == null and wolf.flock_count == 0, "Wolf memory-derived flock facts expire on their original target deadlines")
+	wolf.free()
 	ai.free()
 
 # Snapshot oracle retained only in tests; production has a single reducer.

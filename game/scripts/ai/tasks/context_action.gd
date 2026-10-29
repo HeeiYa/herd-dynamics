@@ -3,16 +3,16 @@ extends BTAction
 var context: AgentContext
 var token: int = 0
 var entered_tick: int = 0
+var _task_identifier: StringName
 
 func _setup() -> void:
 	context = blackboard.get_var(AIBlackboard.CONTEXT) as AgentContext
 	assert(context != null)
+	_task_identifier = StringName(get_script().resource_path.get_file().get_basename())
 
 func _enter() -> void:
 	token = context.new_token()
 	entered_tick = context.current_tick
-	context.task_token = token
-	context.task_name = StringName(get_script().resource_path.get_file().get_basename())
 
 func _exit() -> void:
 	context.coordinator.intents.clear_owned(context.handle, token)
@@ -32,3 +32,6 @@ func write_intent(mode: int, behavior: int, destination: Vector2, speed: float, 
 	intent.resource_cell = resource_cell
 	intent.reason = reason
 	context.coordinator.intents.write(context.handle, intent)
+	# A failed higher-priority attempt must not replace the running leaf's label.
+	context.task_token = token
+	context.task_name = _task_identifier

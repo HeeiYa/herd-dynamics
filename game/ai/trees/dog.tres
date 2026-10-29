@@ -4,6 +4,8 @@
 [ext_resource type="Script" uid="uid://03m3rj05aq5i" path="res://scripts/ai/tasks/guard_flock.gd" id="guard_flock"]
 [ext_resource type="Script" uid="uid://0jum1nd7q134" path="res://scripts/ai/tasks/intercept_wolf.gd" id="intercept_wolf"]
 [ext_resource type="Script" uid="uid://ccd0o6q147363" path="res://scripts/ai/tasks/return_to_flock.gd" id="return_to_flock"]
+[ext_resource type="Script" uid="uid://d0sw8gpbdgqr4" path="res://scripts/ai/tasks/search_area.gd" id="search_area"]
+[ext_resource type="Script" uid="uid://dfl1f0df4d4ue" path="res://scripts/ai/tasks/search_last_flock.gd" id="search_last_flock"]
 
 [sub_resource type="BlackboardPlan" id="BlackboardPlan_g057h"]
 
@@ -33,13 +35,39 @@ script = ExtResource("intercept_wolf")
 custom_name = "Threat to local flock (continuous guard)"
 children = [SubResource("condition_1"), SubResource("action_1_0")]
 
-[sub_resource type="BTAction" id="fallback"]
+[sub_resource type="BTCondition" id="condition_flock"]
+custom_name = "Current local protection flock"
+script = ExtResource("check_fact")
+fact = 10
+
+[sub_resource type="BTAction" id="guard"]
 custom_name = "guard_flock"
 script = ExtResource("guard_flock")
 
+[sub_resource type="BTDynamicSequence" id="branch_flock"]
+custom_name = "Guard an observed local flock"
+children = [SubResource("condition_flock"), SubResource("guard")]
+
+[sub_resource type="BTCondition" id="condition_memory"]
+custom_name = "Unvisited last flock location"
+script = ExtResource("check_fact")
+fact = 11
+
+[sub_resource type="BTAction" id="search_memory"]
+custom_name = "search_last_flock"
+script = ExtResource("search_last_flock")
+
+[sub_resource type="BTDynamicSequence" id="branch_memory"]
+custom_name = "Look for the lost protection flock"
+children = [SubResource("condition_memory"), SubResource("search_memory")]
+
+[sub_resource type="BTAction" id="fallback"]
+custom_name = "search_area"
+script = ExtResource("search_area")
+
 [sub_resource type="BTDynamicSelector" id="root"]
 custom_name = "Reactive priorities"
-children = [SubResource("branch_0"), SubResource("branch_1"), SubResource("fallback")]
+children = [SubResource("branch_0"), SubResource("branch_1"), SubResource("branch_flock"), SubResource("branch_memory"), SubResource("fallback")]
 
 [resource]
 blackboard_plan = SubResource("BlackboardPlan_g057h")

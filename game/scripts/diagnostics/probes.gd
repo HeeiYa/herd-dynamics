@@ -1,11 +1,11 @@
 class_name Probes
 extends RefCounted
 ## Bounded diagnostics; never owns simulation state or consumes random numbers.
-enum Tag { BEGIN_STEP, ENQUEUE, QUERY, REFRESH, PUBLISH, DECISION, PERCEPTION_JOB, GRASS, BUILD, SORT, COORDINATION, DELIVERY, REFRESH_DIRECT, REFRESH_SHARED, MERGE, OBSERVE, PRUNE }
+enum Tag { BEGIN_STEP, ENQUEUE, QUERY, REFRESH, PUBLISH, DECISION, PERCEPTION_JOB, GRASS, BUILD, SORT, COORDINATION, DELIVERY, REFRESH_DIRECT, REFRESH_SHARED, MERGE, OBSERVE, PRUNE, DECISION_FACTS, FLOCK_QUERY }
 enum Counter { PERCEPTION_SERVED, DECISION_SERVED, URGENT_SERVED, PERCEPTION_STALE, DECISION_STALE, URGENT_STALE, BUDGET_EXHAUSTED }
 enum Task { WAITING, FEED, FLEE, GRAZE, GUARD, HUNT, INTERCEPT, REGROUP, ATTACK, RETURN, SEARCH, SEARCH_MEMORY }
-const LABELS := ["ai.begin_step", "ai.enqueue", "ai.perception.query", "ai.perception.refresh", "ai.perception.publish", "ai.decision.update", "ai.perception.job", "render.grass.update", "render.build", "render.sort", "ai.coordination", "ai.delivery", "ai.perception.refresh.direct", "ai.perception.refresh.shared", "ai.delivery.merge", "ai.perception.observe", "ai.perception.prune"]
-const TASKS := ["Waiting for first perception", "feed_capture", "flee_threat", "graze_grass", "guard_flock", "hunt_prey", "intercept_wolf", "regroup_flock", "request_attack", "return_to_flock", "search_area", "search_memory"]
+const LABELS := ["ai.begin_step", "ai.enqueue", "ai.perception.query", "ai.perception.refresh", "ai.perception.publish", "ai.decision.update", "ai.perception.job", "render.grass.update", "render.build", "render.sort", "ai.coordination", "ai.delivery", "ai.perception.refresh.direct", "ai.perception.refresh.shared", "ai.delivery.merge", "ai.perception.observe", "ai.perception.prune", "ai.decision.facts", "ai.perception.flock_query"]
+const TASKS := ["Waiting for first perception", "feed_capture", "flee_threat", "graze_grass", "guard_flock", "hunt_prey", "intercept_wolf", "regroup_flock", "request_attack", "return_to_flock", "search_area", "search_memory", "search_last_flock", "rest_satiated"]
 const CAPACITY: int = 4096
 const WIDTH: int = 8
 var enabled: bool = false

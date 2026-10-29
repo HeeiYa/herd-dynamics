@@ -7,13 +7,22 @@ var handle: AgentHandle
 var species: int = SimTypes.Species.SHEEP
 var player: BTPlayer
 var observations: Dictionary[int, LocalObservation] = {}
-# PerceptionSystem alone maintains these derived observation caches. The sheep
-# sum excludes this observer; current self position is added on every refresh.
+# PerceptionSystem alone maintains these derived observation caches. For the
+# individual-memory policy, the sheep sum excludes this observer.
 var remembered_flock_sum: Vector2 = Vector2.ZERO
 var remembered_flock_count: int = 0
 var flock_cache_dirty: bool = true
 var flock_cache_expires_tick: int = 0
 var fact_cache_life_revision: int = -1
+var facts_dirty: bool = true
+var facts_expire_tick: int = 0
+var facts_origin: Vector2 = Vector2.ZERO
+# A direct flock sample is a fixed historical observation, replaced as a whole.
+# It owns values rather than a reference to the query system's scratch sample.
+var flock_sample_count: int = 0
+var flock_sample_center: Vector2 = Vector2.ZERO
+var flock_sample_observed_tick: int = -1
+var flock_sample_expires_tick: int = 0
 var threat_view_dirty: bool = true
 var threat_observations: Array[LocalObservation] = []
 # Indices refer only to threat_observations, never AgentStore dense indices.
@@ -32,6 +41,15 @@ var committed_target: AgentHandle
 var commit_until: int = 0
 var pursuit_until: int = 0
 var intercept_rest_until: int = 0
+var returning_to_flock: bool = false
+var retreating: bool = false
+var last_flock_seen_tick: int = -1
+var last_flock_searched_tick: int = -1
+var grazing_committed: bool = false
+var regrouping: bool = false
+var grazing_retry_after_tick: int = 0
+var rejected_prey: AgentHandle
+var rejected_prey_until: int = 0
 var next_perception_tick: int = 0
 var next_decision_tick: int = 0
 var perception_queued: bool = false
@@ -47,6 +65,11 @@ var task_token: int = 0
 var lease_token: int = 0
 var wander_destination: Vector2 = Vector2.ZERO
 var wander_until: int = 0
+var exploration_history: PackedVector2Array = PackedVector2Array()
+var exploration_history_cursor: int = 0
+var exploration_sequence: int = 0
+var exploration_progress_position: Vector2 = Vector2.ZERO
+var exploration_progress_tick: int = 0
 var _next_token: int = 1
 
 func position() -> Vector2:
@@ -71,7 +94,13 @@ func observation_for(target: AgentHandle) -> LocalObservation:
 	return observation
 
 func is_alert() -> bool:
-	return threat != null or dog_threat != null or prey != null or current_tick < safe_after_tick
+	if current_tick < safe_after_tick:
+		return true
+	if threat != null and observation_for(threat.handle) != null:
+		return true
+	if dog_threat != null and observation_for(dog_threat.handle) != null:
+		return true
+	return prey != null and observation_for(prey.handle) != null
 
 func clear_runtime() -> void:
 	if player != null:
@@ -84,6 +113,13 @@ func clear_runtime() -> void:
 	flock_cache_dirty = true
 	flock_cache_expires_tick = 0
 	fact_cache_life_revision = -1
+	facts_dirty = true
+	facts_expire_tick = 0
+	facts_origin = Vector2.ZERO
+	flock_sample_count = 0
+	flock_sample_center = Vector2.ZERO
+	flock_sample_observed_tick = -1
+	flock_sample_expires_tick = 0
 	threat_view_dirty = true
 	threat_observations.clear()
 	threat_view_indices.clear()
@@ -91,6 +127,22 @@ func clear_runtime() -> void:
 	prey = null
 	dog_threat = null
 	committed_target = null
+	rejected_prey = null
+	rejected_prey_until = 0
+	returning_to_flock = false
+	retreating = false
+	last_flock_seen_tick = -1
+	last_flock_searched_tick = -1
+	grazing_committed = false
+	regrouping = false
+	grazing_retry_after_tick = 0
+	wander_destination = Vector2.ZERO
+	wander_until = 0
+	exploration_history.clear()
+	exploration_history_cursor = 0
+	exploration_sequence = 0
+	exploration_progress_position = Vector2.ZERO
+	exploration_progress_tick = 0
 	feeding_until = 0
 	lease_token = 0
 	perception_queued = false

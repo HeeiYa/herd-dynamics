@@ -1,5 +1,29 @@
 class_name AISettings
 extends Resource
+
+# Completion thresholds and bounded exploration remain individual BT policy.
+@export var regroup_exit_distance: float = 52.0
+@export var hard_regroup_distance: float = 230.0
+@export var hungry_threshold: float = 0.35
+@export var satiated_threshold: float = 0.08
+@export var graze_no_progress_ticks: int = 180
+@export var graze_progress_distance: float = 6.0
+@export var graze_retry_ticks: int = 90
+@export var escape_direction_count: int = 16
+@export var escape_lookahead_distance: float = 180.0
+@export var escape_direction_bias: float = 14.0
+@export var escape_commit_ticks: int = 12
+@export var exploration_leg_distance: float = 360.0
+@export var exploration_timeout_ticks: int = 600
+@export var exploration_stall_ticks: int = 120
+@export var exploration_progress_distance: float = 12.0
+@export var exploration_history_size: int = 8
+@export var exploration_arrival_distance: float = 28.0
+@export var hunt_request_wait_ticks: int = 12
+@export var hunt_retry_ticks: int = 90
+@export var memory_search_leg_ticks: int = 90
+@export var protection_commit_bonus: float = 1.25
+@export var dog_risk_exit_radius: float = 145.0
 ## Shared, read-only strategy parameters. Units are pixels, seconds, or simulation ticks.
 @export var calm_perception_ticks: int = 6
 @export var alert_perception_ticks: int = 3
@@ -13,7 +37,6 @@ extends Resource
 @export var guard_speed: float = 66.0
 @export var graze_speed: float = 38.0
 @export var regroup_distance: float = 80.0
-@export var graze_arrival_distance: float = 22.0
 @export var dog_risk_radius: float = 105.0
 @export var wolf_commit_ticks: int = 90
 @export var target_switch_ratio: float = 0.72

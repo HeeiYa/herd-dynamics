@@ -49,6 +49,8 @@ func _score(candidate: LocalObservation) -> float:
 func _eligible(sighting: LocalObservation) -> bool:
 	if sighting.species != SimTypes.Species.SHEEP or context.observation_for(sighting.handle) == null:
 		return false
+	if context.rejected_prey != null and context.current_tick < context.rejected_prey_until and context.rejected_prey.same_life(sighting.handle):
+		return false
 	if not require_direct_sighting:
 		return true
 	return sighting.was_visible_at_scan(context.last_perception_tick, context.current_tick, context.coordinator.config.memory_ticks)

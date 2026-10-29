@@ -4,6 +4,7 @@
 [ext_resource type="Script" uid="uid://b24nsebdxbbpo" path="res://scripts/ai/tasks/flee_threat.gd" id="flee_threat"]
 [ext_resource type="Script" uid="uid://cgc6l4y4hhvt2" path="res://scripts/ai/tasks/graze_grass.gd" id="graze_grass"]
 [ext_resource type="Script" uid="uid://dug2kgq7quouk" path="res://scripts/ai/tasks/regroup_flock.gd" id="regroup_flock"]
+[ext_resource type="Script" uid="uid://bod0c1neq3hj5" path="res://scripts/ai/tasks/rest_satiated.gd" id="rest_satiated"]
 [ext_resource type="Script" uid="uid://d0sw8gpbdgqr4" path="res://scripts/ai/tasks/search_area.gd" id="search_area"]
 
 [sub_resource type="BlackboardPlan" id="BlackboardPlan_wpcyd"]
@@ -22,30 +23,56 @@ custom_name = "Unsafe or safety hold (continuous guard)"
 children = [SubResource("condition_0"), SubResource("action_0_0")]
 
 [sub_resource type="BTCondition" id="condition_1"]
-custom_name = "Separated from local flock"
+custom_name = "Beyond hard flock distance"
 script = ExtResource("check_fact")
-fact = 5
+fact = 12
 
 [sub_resource type="BTAction" id="action_1_0"]
 custom_name = "regroup_flock"
 script = ExtResource("regroup_flock")
 
 [sub_resource type="BTDynamicSequence" id="branch_1"]
-custom_name = "Separated from local flock (continuous guard)"
+custom_name = "Hard flock boundary overrides food commitment"
 children = [SubResource("condition_1"), SubResource("action_1_0")]
 
 [sub_resource type="BTCondition" id="condition_2"]
-custom_name = "Local grass available"
+custom_name = "Hungry or committed until satiated"
 script = ExtResource("check_fact")
-fact = 6
+fact = 13
 
 [sub_resource type="BTAction" id="action_2_0"]
 custom_name = "graze_grass"
 script = ExtResource("graze_grass")
 
 [sub_resource type="BTDynamicSequence" id="branch_2"]
-custom_name = "Local grass available (continuous guard)"
+custom_name = "Committed feeding before ordinary regroup"
 children = [SubResource("condition_2"), SubResource("action_2_0")]
+
+[sub_resource type="BTCondition" id="condition_3"]
+custom_name = "Separated from local flock with hysteresis"
+script = ExtResource("check_fact")
+fact = 5
+
+[sub_resource type="BTAction" id="action_3_0"]
+custom_name = "regroup_flock"
+script = ExtResource("regroup_flock")
+
+[sub_resource type="BTDynamicSequence" id="branch_3"]
+custom_name = "Ordinary regroup when not committed to feeding"
+children = [SubResource("condition_3"), SubResource("action_3_0")]
+
+[sub_resource type="BTCondition" id="condition_4"]
+custom_name = "Satiated and no feeding commitment"
+script = ExtResource("check_fact")
+fact = 14
+
+[sub_resource type="BTAction" id="action_4_0"]
+custom_name = "rest_satiated"
+script = ExtResource("rest_satiated")
+
+[sub_resource type="BTDynamicSequence" id="branch_4"]
+custom_name = "Rest until hunger resumes"
+children = [SubResource("condition_4"), SubResource("action_4_0")]
 
 [sub_resource type="BTAction" id="fallback"]
 custom_name = "search_area"
@@ -53,7 +80,7 @@ script = ExtResource("search_area")
 
 [sub_resource type="BTDynamicSelector" id="root"]
 custom_name = "Reactive priorities"
-children = [SubResource("branch_0"), SubResource("branch_1"), SubResource("branch_2"), SubResource("fallback")]
+children = [SubResource("branch_0"), SubResource("branch_1"), SubResource("branch_2"), SubResource("branch_3"), SubResource("branch_4"), SubResource("fallback")]
 
 [resource]
 blackboard_plan = SubResource("BlackboardPlan_wpcyd")

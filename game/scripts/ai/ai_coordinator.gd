@@ -317,6 +317,10 @@ func _run_decision(tick: int) -> bool:
 	context.decision_queued = false
 	context.urgent_queued = false
 	context.current_tick = tick
+	var facts_start: int = Time.get_ticks_usec() if probes.enabled else 0
+	perception.prepare_decision(context, tick)
+	if probes.enabled:
+		probes.record(Probes.Tag.DECISION_FACTS, Time.get_ticks_usec() - facts_start)
 	max_decision_delay_ticks = maxi(max_decision_delay_ticks, tick - entry.due_tick)
 	if context.player.get_bt_instance() != null:
 		var elapsed: float = float(maxi(1, tick - context.last_decision_tick)) * config.fixed_dt
@@ -385,3 +389,10 @@ func sample_pending(tick: int) -> void:
 			var category: int = 2 if context.urgent_queued else 1
 			probes.queues[category] += 1
 			probes.queues[category + 3] = maxi(probes.queues[category + 3], tick - context.next_decision_tick)
+
+func knowledge_observation_counts() -> PackedInt32Array:
+	# Snapshot diagnostic: aggregate only after sampling, outside job timing.
+	var counts := PackedInt32Array([0, 0, 0])
+	for context: AgentContext in contexts.values():
+		counts[context.species] += context.observations.size()
+	return counts

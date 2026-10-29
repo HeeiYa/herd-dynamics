@@ -1,6 +1,7 @@
 class_name ResourceGrid
 extends RefCounted
 ## Grass recovery is pure on read; only consume materializes authoritative state.
+const MIN_GRAZABLE_AMOUNT: float = 0.03
 var cell_size: float = 80.0
 var columns: int
 var rows: int
@@ -11,12 +12,14 @@ var _previous_amount: PackedFloat32Array = PackedFloat32Array()
 var _previous_tick: PackedInt64Array = PackedInt64Array()
 var _recovery_per_tick: float
 var _world_size: Vector2
+var _default_body_radius: float
 
 func _init(config: SimulationConfig = null) -> void:
 	if config == null:
 		config = SimulationConfig.new()
 	cell_size = config.resource_cell_size
 	_world_size = config.world_size
+	_default_body_radius = config.agent_radius
 	columns = ceili(config.world_size.x / cell_size)
 	rows = ceili(config.world_size.y / cell_size)
 	cell_count = columns * rows
@@ -45,6 +48,25 @@ func cell_bounds(cell: int) -> Rect2:
 func cell_center(cell: int) -> Vector2:
 	return cell_bounds(cell).get_center()
 
+func can_graze_at(cell: int, position: Vector2) -> bool:
+	# The body center belongs to exactly one half-open cell. Clamping cell_at
+	# alone would incorrectly authorize an out-of-world or adjacent-cell eater.
+	return cell >= 0 and cell < cell_count and cell_bounds(cell).has_point(position)
+
+func grazing_point(cell: int, handle: AgentHandle, body_radius: float) -> Vector2:
+	var bounds: Rect2 = _reachable_bounds(cell, body_radius)
+	assert(bounds.has_area(), "A selected grass cell must have reachable body-center area")
+	# Fractional irrational sequences scatter identities without random-stream
+	# consumption. Keep a margin inside the cell so steering can yield locally.
+	var identity: float = float(handle.slot) + float(handle.generation) * 0.5
+	var fraction := Vector2(fposmod(identity * 0.754877666, 1.0), fposmod(identity * 0.569840296, 1.0))
+	fraction = Vector2.ONE * 0.15 + fraction * 0.7
+	return bounds.position + bounds.size * fraction
+
+func _reachable_bounds(cell: int, body_radius: float) -> Rect2:
+	var inset: Vector2 = Vector2.ONE * body_radius
+	return cell_bounds(cell).intersection(Rect2(inset, _world_size - inset * 2.0))
+
 func cell_at(position: Vector2) -> int:
 	return clampi(floori(position.y / cell_size), 0, rows - 1) * columns + clampi(floori(position.x / cell_size), 0, columns - 1)
 
@@ -67,7 +89,7 @@ func consume(cell: int, requested: float, tick: int) -> float:
 	_materialized_tick[cell] = committed_tick
 	return consumed
 
-func best_cell(position: Vector2, search_radius: float, tick: int) -> int:
+func best_cell(position: Vector2, search_radius: float, tick: int, excluded_cell: int = -1) -> int:
 	var best: int = -1
 	var best_score: float = -INF
 	var min_x: int = maxi(0, floori((position.x - search_radius) / cell_size))
@@ -77,9 +99,13 @@ func best_cell(position: Vector2, search_radius: float, tick: int) -> int:
 	for y: int in range(min_y, max_y + 1):
 		for x: int in range(min_x, max_x + 1):
 			var cell: int = y * columns + x
+			if cell == excluded_cell:
+				continue
+			if not _reachable_bounds(cell, _default_body_radius).has_area():
+				continue
 			var distance: float = position.distance_to(cell_center(cell))
 			var available: float = get_effective_amount(cell, tick)
-			if distance > search_radius or available < 0.03:
+			if distance > search_radius or available < MIN_GRAZABLE_AMOUNT:
 				continue
 			var score: float = available - distance / maxf(search_radius, 1.0) * 0.3
 			if score > best_score:
