@@ -41,6 +41,7 @@ class Change extends RefCounted:
 
 class LogEntry extends RefCounted:
 	var tick: int
+	var epoch: int
 	var key: Param
 	var previous: float
 	var value: float
@@ -48,6 +49,8 @@ class LogEntry extends RefCounted:
 var parameters: Array[Parameter] = []
 # Local run record of applied edits, also printed to the log as TUNING lines.
 var history: Array[LogEntry] = []
+const HISTORY_LIMIT: int = 256
+var applied_count: int = 0
 var _config: SimulationConfig
 var _settings: AISettings
 # Base values of every BT speed field, captured before any multiplier.
@@ -97,20 +100,39 @@ func is_modified(key: Param) -> bool:
 	return not is_equal_approx(parameter.value, parameter.default_value)
 
 ## Stage 0 only. Values are clamped to the published range.
-func apply(change: Change, tick: int) -> void:
+func apply(change: Change, tick: int, epoch: int = 0) -> LogEntry:
+	assert(validated_copy(change) != null, "Only validated tuning commands reach stage 0")
 	var parameter: Parameter = parameters[change.key]
 	var value: float = clampf(change.value, parameter.minimum, parameter.maximum)
 	if is_equal_approx(value, parameter.value):
-		return
+		return null
 	var entry := LogEntry.new()
 	entry.tick = tick
+	entry.epoch = epoch
 	entry.key = change.key
 	entry.previous = parameter.value
 	entry.value = value
 	history.append(entry)
-	print("TUNING tick=%d %s %.3f -> %.3f" % [tick, Param.keys()[change.key], parameter.value, value])
+	if history.size() > HISTORY_LIMIT:
+		history.pop_front()
+	applied_count += 1
+	print("TUNING epoch=%d tick=%d %s %.3f -> %.3f" % [epoch, tick, Param.keys()[change.key], parameter.value, value])
 	parameter.value = value
 	_write(change.key, value)
+	return entry
+
+## Own a bounded finite snapshot; callers cannot mutate a queued command.
+func validated_copy(change: Change) -> Change:
+	if change == null or change.key < 0 or change.key >= parameters.size() or not is_finite(change.value):
+		return null
+	var parameter: Parameter = parameters[change.key]
+	return Change.new(change.key, clampf(change.value, parameter.minimum, parameter.maximum))
+
+func snapshot() -> Dictionary:
+	var result: Dictionary = {}
+	for parameter: Parameter in parameters:
+		result[Param.keys()[parameter.key]] = parameter.value
+	return result
 
 func _write(key: Param, value: float) -> void:
 	match key:

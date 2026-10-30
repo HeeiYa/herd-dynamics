@@ -41,9 +41,9 @@ func is_busy() -> bool:
 func begin(target: AgentHandle, world_point: Vector2) -> bool:
 	if state != State.IDLE or target == null or not _world.store.is_active(target):
 		return false
-	var foot: Variant = _view.display_foot(target)
 	handle = target
-	_origin = foot if foot != null else world_point
+	# Cancellation restores the authoritative origin, not an interpolated foot.
+	_origin = _world.store.position_current[_world.store.resolve(target)]
 	_region = _view.body_region(target)
 	pointer_world = world_point
 	pointer_valid = true
@@ -65,13 +65,13 @@ func release() -> void:
 func cancel() -> void:
 	if state == State.IDLE:
 		return
-	if state == State.CARRYING and _world.cancel_pending_hold(handle):
+	if _world.cancel_grab(handle, _origin):
+		_drop_position = _origin
+		state = State.DROP_PENDING
+		message.emit("已取消，下一模拟步放回原处")
+	else:
 		message.emit("已取消抓取")
 		_finish()
-		return
-	if state == State.CARRYING:
-		message.emit("已取消，放回原处")
-		_queue_drop(_origin)
 
 func _queue_drop(position: Vector2) -> void:
 	_drop_position = position

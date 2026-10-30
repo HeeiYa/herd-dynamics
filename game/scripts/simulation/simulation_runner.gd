@@ -34,6 +34,14 @@ func request_single_step() -> void:
 	_pending_pause = 1
 	_single_step = true
 
+func set_speed(value: float) -> bool:
+	if not is_finite(value) or value <= 0.0:
+		return false
+	if not is_equal_approx(speed, value):
+		speed = value
+		world.record_observer_event("time_scale", {"value": speed})
+	return true
+
 func _process(_delta: float) -> void:
 	if world == null:
 		return
@@ -45,6 +53,8 @@ func _process(_delta: float) -> void:
 	if _pending_pause >= 0:
 		var was_paused: bool = paused
 		paused = _pending_pause == 1
+		if paused != was_paused:
+			world.record_observer_event("pause", {"value": paused})
 		_pending_pause = -1
 		# Pause has already shown S(n). Interpolating the old interval on resume
 		# would move the display clock backward until another step is published.
@@ -67,6 +77,7 @@ func _process(_delta: float) -> void:
 	last_step_count = 0
 	if _single_step:
 		_run_step()
+		world.record_observer_event("single_step")
 		_single_step = false
 	elif not paused:
 		accumulator_seconds += elapsed * speed

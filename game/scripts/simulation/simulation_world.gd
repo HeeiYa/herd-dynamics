@@ -5,6 +5,8 @@ signal captured(event: CaptureEvent)
 ## Emitted at stage 0 after observer commands change the world. Presentation
 ## uses it to clear "pending" labels; it carries no simulation authority.
 signal observer_commands_applied(tick: int)
+signal observer_reset(epoch: int)
+signal observer_event(record: Dictionary)
 
 class DropCommand extends RefCounted:
 	var handle: AgentHandle
@@ -68,9 +70,15 @@ func reset(initial: ScenarioConfig) -> void:
 	_pending_holds.clear()
 	_pending_drops.clear()
 	_pending_places.clear()
+	_pending_tuning.clear()
 	spawn_planner = SpawnPlanner.new(config, scenario) if ScenarioConfig.is_planned(scenario.layout) else null
 	pending_spawns = PackedInt32Array([scenario.sheep_count, scenario.wolf_count, scenario.dog_count])
 	phase_usec.fill(0)
+	observer_reset.emit(store.epoch)
+	record_observer_event("reset", {
+		"counts": [scenario.sheep_count, scenario.wolf_count, scenario.dog_count],
+		"parameters": tuning.snapshot(),
+	})
 
 func queue_spawn(species: int, amount: int) -> void:
 	assert(species >= 0 and species <= SimTypes.Species.DOG)
@@ -88,7 +96,7 @@ func queue_hold(handle: AgentHandle) -> void:
 ## Observer intervention: put a held life down at the next stage 0. A drop
 ## queued in the same frame as its hold is applied after that hold.
 func queue_drop(handle: AgentHandle, position: Vector2) -> void:
-	if handle == null:
+	if handle == null or not position.is_finite():
 		return
 	var command := DropCommand.new()
 	command.handle = handle
@@ -103,16 +111,38 @@ func cancel_pending_hold(handle: AgentHandle) -> bool:
 			return true
 	return false
 
+## Withdraw this life's queued grab/drop. An applied hold returns at stage 0.
+## Returns true only when a return command is pending; never moves a body here.
+func cancel_grab(handle: AgentHandle, origin: Vector2) -> bool:
+	if handle == null:
+		return false
+	for index: int in range(_pending_holds.size() - 1, -1, -1):
+		if _pending_holds[index].same_life(handle):
+			_pending_holds.remove_at(index)
+	for index: int in range(_pending_drops.size() - 1, -1, -1):
+		if _pending_drops[index].handle.same_life(handle):
+			_pending_drops.remove_at(index)
+	if store.is_held(handle):
+		queue_drop(handle, origin)
+		return true
+	return false
+
 func queue_place(species: int, position: Vector2) -> void:
 	assert(species >= 0 and species <= SimTypes.Species.DOG)
+	if not position.is_finite():
+		return
 	var command := PlaceCommand.new()
 	command.species = species
 	command.position = position
 	_pending_places.append(command)
 
 ## Parameter changes take effect at the next stage 0, never inside a step.
-func queue_tuning(change: TuningCatalog.Change) -> void:
-	_pending_tuning.append(change)
+func queue_tuning(change: TuningCatalog.Change) -> bool:
+	var snapshot: TuningCatalog.Change = tuning.validated_copy(change)
+	if snapshot == null:
+		return false
+	_pending_tuning.append(snapshot)
+	return true
 
 func has_pending_observer_commands() -> bool:
 	return not (_pending_holds.is_empty() and _pending_drops.is_empty() and _pending_places.is_empty() and _pending_tuning.is_empty())
@@ -156,6 +186,8 @@ func _legacy_spawn_position(species: int) -> Vector2:
 
 func _apply_commands() -> void:
 	for handle: AgentHandle in _pending_removals:
+		if store.is_alive(handle):
+			record_observer_event("remove", {"handle": handle.key()})
 		_remove(handle)
 	_pending_removals.clear()
 	var observer_changed: bool = _apply_observer_commands()
@@ -172,7 +204,9 @@ func _apply_commands() -> void:
 func _apply_observer_commands() -> bool:
 	var changed: bool = has_pending_observer_commands()
 	for change: TuningCatalog.Change in _pending_tuning:
-		tuning.apply(change, tick)
+		var entry: TuningCatalog.LogEntry = tuning.apply(change, tick, store.epoch)
+		if entry != null:
+			record_observer_event("parameter", {"key": TuningCatalog.Param.keys()[entry.key], "previous": entry.previous, "value": entry.value})
 	if not _pending_tuning.is_empty():
 		# Radii and policy distances feed cached facts; rebuild them once.
 		ai.invalidate_facts()
@@ -185,7 +219,9 @@ func _apply_observer_commands() -> bool:
 	_pending_drops.clear()
 	for command: PlaceCommand in _pending_places:
 		var body: float = config.agent_radius
-		create_at(command.species, command.position.clamp(Vector2.ONE * body, config.world_size - Vector2.ONE * body))
+		var position: Vector2 = command.position.clamp(Vector2.ONE * body, config.world_size - Vector2.ONE * body)
+		var handle: AgentHandle = create_at(command.species, position)
+		_record_placement("place", handle, position)
 	_pending_places.clear()
 	return changed
 
@@ -196,6 +232,7 @@ func _hold(handle: AgentHandle) -> void:
 	store.set_held(handle, true)
 	interaction.suspend(handle)
 	ai.suspend_agent(handle)
+	_record_placement("hold", handle, store.position_current[store.resolve(handle)])
 
 func _drop(handle: AgentHandle, position: Vector2) -> void:
 	if not store.is_held(handle):
@@ -204,6 +241,17 @@ func _drop(handle: AgentHandle, position: Vector2) -> void:
 	store.relocate(handle, position.clamp(Vector2.ONE * body, config.world_size - Vector2.ONE * body))
 	store.set_held(handle, false)
 	ai.resume_agent(handle, tick)
+	_record_placement("drop", handle, store.position_current[store.resolve(handle)])
+
+func _record_placement(action: String, handle: AgentHandle, position: Vector2) -> void:
+	record_observer_event(action, {"handle": handle.key(), "position": [position.x, position.y]})
+
+## Diagnostics boundary: serialization consumers receive values, not live state.
+func record_observer_event(action: String, fields: Dictionary = {}) -> void:
+	var record: Dictionary = fields.duplicate(true)
+	record.merge({"event": action, "epoch": store.epoch, "tick": tick,
+		"seed": scenario.random_seed, "layout": scenario.layout}, true)
+	observer_event.emit(record)
 
 func _remove(handle: AgentHandle) -> void:
 	# Coordinator invalidates ownership before the slot can be reused.

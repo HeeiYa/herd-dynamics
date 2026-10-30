@@ -28,6 +28,7 @@ var _runner: SimulationRunner
 var _camera: ObserverCamera
 var _insight: InsightOverlay
 var _grab: GrabTool
+var _session_log: ObserverSessionLog
 var _selected: AgentHandle
 var _tool: Tool = Tool.SELECT
 var _place_species: int = SimTypes.Species.DOG
@@ -109,7 +110,11 @@ func _initialize() -> void:
 	_runner = SimulationRunner.new()
 	add_child(_runner)
 	_runner.setup(_world, _view)
+	if not has_meta("benchmark_view"):
+		_session_log = ObserverSessionLog.new()
+		_session_log.start(_world, _runner)
 	_build_hud()
+	_tuning.range_preview_changed.connect(_insight.set_range_preview)
 	_runner.frame_updated.connect(_refresh_panel)
 	get_viewport().size_changed.connect(_update_usable_rect)
 	# Panel sizes are known only after layout; follow every resize.
@@ -118,6 +123,10 @@ func _initialize() -> void:
 	_update_usable_rect()
 	_camera.show_overview(true)
 	_refresh_panel()
+
+func _exit_tree() -> void:
+	if _session_log != null:
+		_session_log.close()
 
 # --- HUD construction -------------------------------------------------------
 
@@ -194,7 +203,7 @@ func _build_top_bar() -> void:
 	for value: float in SPEEDS:
 		_speed.add_item("%s×" % str(value))
 	_speed.select(SPEEDS.find(1.0))
-	_speed.item_selected.connect(func(index: int) -> void: _runner.speed = SPEEDS[index])
+	_speed.item_selected.connect(func(index: int) -> void: _runner.set_speed(SPEEDS[index]))
 	row.add_child(_speed)
 	row.add_child(_button("重置", _reset_scenario, "R：按“场景”页的初始条件重置"))
 	row.add_child(VSeparator.new())
@@ -231,7 +240,7 @@ func _build_toolbar() -> void:
 	column.add_child(_caption("显示"))
 	var overlays: Array = [
 		[&"destination", "目的", "选中角色的行动目的地（黄色虚线与叉）", true],
-		[&"target", "目标", "AI 记录的目标位置：实线为亲眼看到，虚线为同伴转告，带信息年龄", true],
+		[&"target", "目标", "AI 历史目标位置：实线为最近扫描看到，长虚线为记忆，短虚线为转告", true],
 		[&"perception", "感知", "选中角色的 AI 感知半径（不是镜头视野）", false],
 		[&"protection", "保护", "选中牧羊犬的保护范围与追击范围", false],
 		[&"marks", "事件", "受惊、锁定、拦截、捕获等短暂状态标记", true],
@@ -397,6 +406,10 @@ func _toggle_panel() -> void:
 ## camera's conversions instead of re-deriving these offsets.
 func _update_usable_rect() -> void:
 	var viewport: Rect2 = get_viewport_rect()
+	# Keep controls reachable on small windows; details remain in their panels.
+	var compact: bool = viewport.size.x < 1200.0
+	_scene_label.visible = not compact
+	_time_label.visible = not compact
 	var left: float = viewport.position.x
 	var top: float = viewport.position.y
 	var right: float = viewport.end.x

@@ -138,13 +138,17 @@ func _target_text(world: SimulationWorld, context: AgentContext, intent: MotionI
 	var species_text: String = "角色"
 	if context == null:
 		return species_text
-	var sighting: LocalObservation = context.observation_for(intent.target)
+	var sighting: LocalObservation = context.observation_for(intent.target, world.tick)
 	if sighting == null:
 		return "已失效（目标消失或记忆过期），等待重新决策"
 	species_text = BehaviorText.species(sighting.species)
 	var age: int = world.tick - sighting.observed_tick
-	var source: String = "亲眼看到" if sighting.source == LocalObservation.Source.DIRECT else "同伴转告"
-	var line_style: String = "实线" if sighting.source == LocalObservation.Source.DIRECT else "虚线"
+	var source: String = "同伴转告"
+	var line_style: String = "短虚线"
+	if sighting.source == LocalObservation.Source.DIRECT:
+		var visible_at_scan: bool = sighting.was_visible_at_scan(context.last_perception_tick, world.tick, world.config.memory_ticks)
+		source = "最近扫描看到" if visible_at_scan else "记忆（亲眼见过）"
+		line_style = "实线" if visible_at_scan else "长虚线"
 	if store_dense < 0:
 		return "%s · %s %s（%s）" % [species_text, source, BehaviorText.age_text(age, world.config.fixed_dt), line_style]
 	return "%s %s · %s %s（%s，终点为记忆位置）" % [species_text, intent.target.key(), source, BehaviorText.age_text(age, world.config.fixed_dt), line_style]

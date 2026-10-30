@@ -49,6 +49,7 @@ func _run() -> void:
 	var picked: AgentHandle = view.pick(world.store.position_current[0])
 	_check(picked != null and world.store.is_alive(picked), "Picking returns a live complete handle")
 	await _test_observer_scene(main, world, runner, view)
+	await _test_pointer_cancel_and_compact_layout(main, world, runner, view)
 	runner.request_pause(false)
 	for frame: int in range(4000):
 		if world.tick >= 600:
@@ -152,6 +153,57 @@ func _test_observer_scene(main: Node2D, world: SimulationWorld, runner: Simulati
 	runner.request_single_step()
 	await process_frame
 	await process_frame
+
+## Pointer input traverses the real scene, then checks a compact viewport.
+func _test_pointer_cancel_and_compact_layout(main: Node2D, world: SimulationWorld, runner: SimulationRunner, view: WorldPresentation) -> void:
+	var handle: AgentHandle = world.store.handle_at(0)
+	var origin: Vector2 = world.store.position_current[world.store.resolve(handle)]
+	var foot: Vector2 = view.display_foot(handle)
+	var screen: Vector2 = main._camera.world_to_screen(foot + Vector2(0, -8))
+	var key := InputEventKey.new()
+	key.pressed = true
+	key.keycode = KEY_G
+	root.push_input(key)
+	var motion := InputEventMouseMotion.new()
+	motion.position = screen
+	motion.global_position = screen
+	root.push_input(motion)
+	var button := InputEventMouseButton.new()
+	button.button_index = MOUSE_BUTTON_LEFT
+	button.button_mask = MOUSE_BUTTON_MASK_LEFT
+	button.pressed = true
+	button.position = screen
+	button.global_position = screen
+	root.push_input(button)
+	_check(main._grab.state == GrabTool.State.CARRYING, "Actual pointer input starts the grab tool")
+	button = button.duplicate()
+	button.pressed = false
+	button.button_mask = 0
+	button.position += Vector2(40, 30)
+	button.global_position = button.position
+	root.push_input(button)
+	_check(main._grab.state == GrabTool.State.DROP_PENDING, "Actual pointer release leaves a paused drop pending")
+	key = key.duplicate()
+	key.keycode = KEY_ESCAPE
+	root.push_input(key)
+	_check(main._grab.state == GrabTool.State.IDLE and not world.has_pending_observer_commands(), "Esc through the scene cancels the paused drop")
+	runner.request_single_step()
+	await process_frame
+	await process_frame
+	_check(world.store.position_previous[world.store.resolve(handle)] == origin, "A cancelled pointer drop does not teleport on the next step")
+	var original_size: Vector2i = root.size
+	root.size = Vector2i(1024, 640)
+	for frame: int in 4:
+		await process_frame
+	_check(main._top_bar.get_global_rect().end.x <= root.get_visible_rect().size.x + 1.0, "Top bar controls fit the compact window")
+	_check(main._camera.usable_rect().size.x > 400.0, "Compact window keeps a useful pasture area with the panel open")
+	for argument: String in OS.get_cmdline_user_args():
+		if argument.begins_with("--capture="):
+			await RenderingServer.frame_post_draw
+			root.get_texture().get_image().save_png(argument.trim_prefix("--capture=").get_basename() + "-compact.png")
+	root.size = original_size
+	for frame: int in 4:
+		await process_frame
 
 ## Extra evidence images next to --capture: selected follow view and hidden UI.
 func _capture_views(main: Node2D, world: SimulationWorld, view: WorldPresentation, path: String) -> void:

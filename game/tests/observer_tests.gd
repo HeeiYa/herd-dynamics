@@ -214,7 +214,7 @@ func _crowded_fraction(points: PackedVector2Array, body_radius: float) -> float:
 		for y: int in range(cell.y - 1, cell.y + 2):
 			for x: int in range(cell.x - 1, cell.x + 2):
 				for other: int in cells.get(Vector2i(x, y), PackedInt32Array()):
-					if other != index and points[index].distance_to(points[other]) < body_radius:
+					if other != index and points[index].distance_to(points[other]) < body_radius * 2.0:
 						overlapping = true
 		if overlapping:
 			crowded += 1

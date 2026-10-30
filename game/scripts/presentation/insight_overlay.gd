@@ -11,6 +11,10 @@ extends Node2D
 
 enum MarkKind { STARTLE, RECOVER, LOCK_ON, POUNCE, GIVE_UP, RETREAT, BARK, RETURN, CAPTURE }
 
+# Draft UI geometry never writes config or affects perception.
+var preview_parameter: int = -1
+var preview_radius: float = 0.0
+
 class Mark extends RefCounted:
 	var handle: AgentHandle
 	var kind: MarkKind
@@ -37,6 +41,16 @@ var _font: Font
 var _marks: Array[Mark] = []
 # Last mark tick per slot; full identity is checked on the stored mark.
 var _last_mark: Dictionary[int, Mark] = {}
+
+func set_range_preview(key: TuningCatalog.Param, radius: float, active: bool) -> void:
+	if key not in [TuningCatalog.Param.PERCEPTION_RADIUS, TuningCatalog.Param.DOG_PROTECTION_RADIUS, TuningCatalog.Param.DOG_LEASH_RADIUS]:
+		return
+	if active:
+		preview_parameter = key
+		preview_radius = radius
+	elif preview_parameter == key:
+		preview_parameter = -1
+	queue_redraw()
 
 func setup(world: SimulationWorld, view: WorldPresentation) -> void:
 	_world = world
@@ -143,6 +157,7 @@ func _draw() -> void:
 func _draw_selected(handle: AgentHandle, foot: Vector2, pixel: float) -> void:
 	var context: AgentContext = _world.ai.inspect(handle)
 	var dense: int = _world.store.resolve(handle)
+	_draw_range_preview(context, dense, foot, pixel)
 	if show_perception:
 		_dashed_circle(foot, _world.config.perception_radius, UiStyle.PERCEPTION, 1.5 * pixel, 10.0 * pixel)
 	if show_protection and context != null and _world.store.species[dense] == SimTypes.Species.DOG and context.flock_count > 0:
@@ -159,25 +174,39 @@ func _draw_selected(handle: AgentHandle, foot: Vector2, pixel: float) -> void:
 	if show_target and intent.target != null and context != null:
 		_draw_known_target(context, intent.target, foot, pixel)
 
+func _draw_range_preview(context: AgentContext, dense: int, foot: Vector2, pixel: float) -> void:
+	if preview_parameter < 0:
+		return
+	var center: Vector2 = foot
+	if preview_parameter != TuningCatalog.Param.PERCEPTION_RADIUS:
+		if context == null or _world.store.species[dense] != SimTypes.Species.DOG or context.flock_count <= 0:
+			return
+		center = context.protection_anchor
+	_dashed_circle(center, preview_radius, UiStyle.DESTINATION, 2.0 * pixel, 5.0 * pixel)
+	_label(center + Vector2(0, -preview_radius), "范围预览 / 待生效 · %d px" % roundi(preview_radius), UiStyle.DESTINATION, pixel)
+
 ## The line ends at the remembered sighting. An expired or invalid memory
 ## draws no line, so the overlay cannot leak where the target went.
 func _draw_known_target(context: AgentContext, target: AgentHandle, foot: Vector2, pixel: float) -> void:
-	var sighting: LocalObservation = context.observation_for(target)
+	var sighting: LocalObservation = context.observation_for(target, _world.tick)
 	if sighting == null:
 		_label(foot + Vector2(0, -42) * pixel, "目标信息已失效", UiStyle.INVALID_DROP, pixel)
 		return
 	var age: int = _world.tick - sighting.observed_tick
 	var direct: bool = sighting.source == LocalObservation.Source.DIRECT
+	var visible_at_scan: bool = direct and sighting.was_visible_at_scan(context.last_perception_tick, _world.tick, _world.config.memory_ticks)
 	var color: Color = UiStyle.TARGET_DIRECT if direct else UiStyle.TARGET_SHARED
 	# Older knowledge fades toward its expiry.
 	var freshness: float = clampf(1.0 - float(age) / maxf(1.0, _world.config.memory_ticks), 0.25, 1.0)
 	color.a = 0.45 + 0.5 * freshness
-	if direct:
+	if visible_at_scan:
 		draw_line(foot, sighting.position, color, 2.0 * pixel, true)
 	else:
-		_dashed_line(foot, sighting.position, color, 2.0 * pixel, 3.0 * pixel)
+		_dashed_line(foot, sighting.position, color, 2.0 * pixel, (7.0 if direct else 3.0) * pixel)
 	draw_arc(sighting.position, 9.0 * pixel, 0.0, TAU, 20, color, 2.0 * pixel, true)
-	var source: String = "看到" if direct else "转告"
+	var source: String = "记忆" if direct else "转告"
+	if visible_at_scan:
+		source = "最近扫描看到"
 	_label(sighting.position + Vector2(10, -10) * pixel, "%s · %s" % [source, BehaviorText.age_text(age, _world.config.fixed_dt)], color, pixel)
 
 func _draw_marks(pixel: float) -> void:

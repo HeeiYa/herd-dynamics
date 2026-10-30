@@ -34,6 +34,8 @@ class Profile extends RefCounted:
 
 const CENTER_ATTEMPTS: int = 48
 const MEMBER_ATTEMPTS: int = 14
+const SPILL_ATTEMPTS: int = 64
+const WOLF_PACK_SPREAD: float = 42.0
 const THREAT_ATTEMPTS: int = 64
 # Herds may cover at most this share of the usable pasture before the planner
 # raises density instead of pushing herds off the map.
@@ -41,6 +43,7 @@ const MAX_HERD_COVERAGE: float = 0.62
 
 var herds: Array[Herd] = []
 var relaxed_placements: int = 0
+var spill_placements: int = 0
 var density_scale: float = 1.0
 var planned_counts: PackedInt32Array = PackedInt32Array([0, 0, 0])
 
@@ -50,6 +53,7 @@ var _bounds: Rect2
 var _spacing: float
 var _queues: Array[PackedVector2Array] = [PackedVector2Array(), PackedVector2Array(), PackedVector2Array()]
 var _cursors: PackedInt32Array = PackedInt32Array([0, 0, 0])
+var _wolf_centers: PackedVector2Array = PackedVector2Array()
 # Planner-private spacing index over planned points; never the live grid.
 var _occupied: Dictionary[Vector2i, PackedVector2Array] = {}
 
@@ -62,9 +66,10 @@ func _init(config: SimulationConfig, scenario: ScenarioConfig) -> void:
 	_random.seed = hash(Vector2i(scenario.random_seed, 0x5eed))
 	var profile: Profile = _profile(scenario.layout)
 	_plan_herds(scenario.sheep_count, profile)
+	_plan_threat_centers(scenario.wolf_count, profile)
 	_plan_sheep(scenario.sheep_count)
 	_plan_dogs(scenario.dog_count)
-	_plan_wolves(scenario.wolf_count, profile)
+	_plan_wolves(scenario.wolf_count)
 	for species: int in range(3):
 		planned_counts[species] = _queues[species].size()
 
@@ -86,6 +91,8 @@ func next_position(species: int) -> Vector2:
 
 func describe() -> String:
 	var text: String = "%d 个羊群 · 密度系数 %.2f" % [herds.size(), density_scale]
+	if spill_placements > 0:
+		text += " · %d 个扩展到空闲区域" % spill_placements
 	if relaxed_placements > 0:
 		text += " · 空间不足，%d 个以较小间距放置" % relaxed_placements
 	return text
@@ -123,9 +130,8 @@ func _plan_herds(sheep_count: int, profile: Profile) -> void:
 	var required_area: float = sheep_count * profile.area_per_sheep
 	density_scale = maxf(1.0, required_area / usable_area)
 	var area_per_sheep: float = profile.area_per_sheep / density_scale
-	# Dense requests relax the minimum spacing with the density so random
-	# sequential placement stays below its jamming limit.
-	_spacing = minf(_spacing, sqrt(area_per_sheep) * 0.6)
+	# Keep the body diameter even when herd footprints reach their area budget.
+	# A full herd spills into free pasture before any spacing is relaxed.
 	# Uneven herd sizes look less staged than an equal split.
 	var weights: PackedFloat32Array = PackedFloat32Array()
 	var weight_total: float = 0.0
@@ -180,6 +186,8 @@ func _herd_point(herd: Herd) -> Vector2:
 		# Exponent above 0.5 keeps the core slightly denser than the rim.
 		var distance: float = pow(_random.randf(), 0.62) * herd.reach(angle)
 		var candidate: Vector2 = _clamped(herd.center + Vector2.from_angle(angle) * distance)
+		if not _outside_threat_reservations(candidate):
+			continue
 		var gap: float = _nearest_gap(candidate)
 		if gap >= _spacing:
 			_occupy(candidate)
@@ -187,9 +195,33 @@ func _herd_point(herd: Herd) -> Vector2:
 		if gap > best_gap:
 			best_gap = gap
 			best = candidate
+	return _spill_sheep(best, best_gap)
+
+## Finite whole-pasture fallback. Only exhaustion permits actual overlap.
+func _spill_sheep(best: Vector2, best_gap: float) -> Vector2:
+	spill_placements += 1
+	for attempt: int in SPILL_ATTEMPTS:
+		var candidate: Vector2 = _bounds.position + Vector2(_random.randf(), _random.randf()) * _bounds.size
+		if not _outside_threat_reservations(candidate):
+			continue
+		var gap: float = _nearest_gap(candidate)
+		if gap >= _spacing:
+			_occupy(candidate)
+			return candidate
+		if gap > best_gap:
+			best = candidate
+			best_gap = gap
 	relaxed_placements += 1
 	_occupy(best)
 	return best
+
+func _outside_threat_reservations(point: Vector2) -> bool:
+	# Reserve actual pack footprints, so spilled sheep do not start under wolves.
+	var clearance: float = _config.perception_radius * 0.5 + WOLF_PACK_SPREAD + _config.agent_radius
+	for center: Vector2 in _wolf_centers:
+		if point.distance_squared_to(center) < clearance * clearance:
+			return false
+	return true
 
 func _plan_dogs(dog_count: int) -> void:
 	if herds.is_empty():
@@ -207,18 +239,22 @@ func _edge_position(herd: Herd) -> Vector2:
 	var distance: float = herd.reach(angle) + _random.randf_range(18.0, 46.0)
 	return _place(herd.center + Vector2.from_angle(angle) * distance, 20.0)
 
-func _plan_wolves(wolf_count: int, profile: Profile) -> void:
+func _plan_threat_centers(wolf_count: int, profile: Profile) -> void:
 	if wolf_count <= 0:
 		return
 	var pack_count: int = clampi(profile.wolf_packs, 1, wolf_count)
 	var base_angle: float = _random.randf_range(0.0, TAU)
 	for pack: int in pack_count:
-		var members: int = wolf_count / pack_count + (1 if pack < wolf_count % pack_count else 0)
 		# Packs approach from different sides of the pasture.
 		var bearing: float = base_angle + TAU * pack / pack_count + _random.randf_range(-0.4, 0.4)
-		var pack_center: Vector2 = _threat_position(bearing, profile.wolf_clearance)
+		_wolf_centers.append(_threat_position(bearing, profile.wolf_clearance))
+
+func _plan_wolves(wolf_count: int) -> void:
+	var pack_count: int = _wolf_centers.size()
+	for pack: int in pack_count:
+		var members: int = wolf_count / pack_count + (1 if pack < wolf_count % pack_count else 0)
 		for member: int in members:
-			_queues[SimTypes.Species.WOLF].append(_place(pack_center, 42.0))
+			_queues[SimTypes.Species.WOLF].append(_place(_wolf_centers[pack], WOLF_PACK_SPREAD))
 
 ## A point far enough from every herd that wolves start by searching, biased
 ## toward the given bearing from the pasture center.

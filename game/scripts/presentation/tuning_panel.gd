@@ -1,5 +1,6 @@
 class_name TuningPanel
 extends VBoxContainer
+signal range_preview_changed(key: TuningCatalog.Param, radius: float, active: bool)
 ## Parameter editor. Dragging only previews; release (or a click/keyboard
 ## change) submits one TuningCatalog.Change to the world, which applies it at
 ## the next stage 0. While paused, submitted values show as pending.
@@ -19,13 +20,15 @@ class Row extends RefCounted:
 	var pending_value: float = 0.0
 	# Programmatic slider updates must not submit changes.
 	var syncing: bool = false
+	# A reset discards the gesture until its release; no edit leaks into the new epoch.
+	var discard_drag: bool = false
 
 func setup(world: SimulationWorld) -> void:
 	_world = world
 	_catalog = world.tuning
 	add_theme_constant_override("separation", 4)
 	var intro := Label.new()
-	intro.text = "拖动预览，松开后提交；模拟参数在下一个固定步生效。重置场景不会还原这些参数。"
+	intro.text = "拖动预览，松开后提交；下一固定步应用配置，速度在角色下次决策后体现。重置保留已应用值，丢弃待生效修改。"
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	intro.add_theme_font_size_override("font_size", 12)
 	intro.modulate = UiStyle.INK_SOFT
@@ -44,6 +47,7 @@ func setup(world: SimulationWorld) -> void:
 	_status.add_theme_font_size_override("font_size", 12)
 	add_child(_status)
 	world.observer_commands_applied.connect(func(_tick: int) -> void: _clear_pending())
+	world.observer_reset.connect(_on_reset)
 	refresh(false)
 
 func _add_row(parameter: TuningCatalog.Parameter) -> void:
@@ -87,7 +91,7 @@ func _add_row(parameter: TuningCatalog.Parameter) -> void:
 	row.slider.scrollable = false
 	row.slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	row.slider.drag_started.connect(func() -> void: row.dragging = true)
+	row.slider.drag_started.connect(func() -> void: _begin_drag(row))
 	row.slider.drag_ended.connect(func(changed: bool) -> void: _end_drag(row, changed))
 	row.slider.value_changed.connect(func(value: float) -> void: _on_value(row, value))
 	line.add_child(row.slider)
@@ -107,24 +111,43 @@ func _add_row(parameter: TuningCatalog.Parameter) -> void:
 func _on_value(row: Row, value: float) -> void:
 	if row.syncing:
 		return
+	if row.discard_drag:
+		_sync_slider(row, _catalog.get_parameter(row.key).value)
+		return
 	_show_value(row, value, true)
-	if not row.dragging:
+	if row.dragging:
+		range_preview_changed.emit(row.key, value, true)
+	else:
 		_submit(row, value)
+
+func _begin_drag(row: Row) -> void:
+	row.dragging = true
+	row.discard_drag = false
+	range_preview_changed.emit(row.key, row.slider.value, true)
 
 func _end_drag(row: Row, changed: bool) -> void:
 	row.dragging = false
+	if row.discard_drag:
+		row.discard_drag = false
+		_sync_slider(row, _catalog.get_parameter(row.key).value)
+		return
 	if changed:
 		_submit(row, row.slider.value)
+	elif not row.pending:
+		range_preview_changed.emit(row.key, 0.0, false)
 
 func _submit(row: Row, value: float) -> void:
 	var parameter: TuningCatalog.Parameter = _catalog.get_parameter(row.key)
 	var current: float = row.pending_value if row.pending else parameter.value
 	if is_equal_approx(value, current):
 		_sync_slider(row, value)
+		range_preview_changed.emit(row.key, value, row.pending)
+		return
+	if not _world.queue_tuning(TuningCatalog.Change.new(row.key, value)):
 		return
 	row.pending = true
 	row.pending_value = value
-	_world.queue_tuning(TuningCatalog.Change.new(row.key, value))
+	range_preview_changed.emit(row.key, value, true)
 	_sync_slider(row, value)
 	refresh(true)
 
@@ -135,7 +158,19 @@ func _restore_all() -> void:
 func _clear_pending() -> void:
 	for row: Row in _rows:
 		row.pending = false
+		if row.dragging:
+			# Another command may apply while this row is still only a draft.
+			continue
+		range_preview_changed.emit(row.key, 0.0, false)
 		_sync_slider(row, _catalog.get_parameter(row.key).value)
+
+func _on_reset(_epoch: int) -> void:
+	for row: Row in _rows:
+		row.pending = false
+		row.discard_drag = row.dragging
+		range_preview_changed.emit(row.key, 0.0, false)
+		_sync_slider(row, _catalog.get_parameter(row.key).value)
+	refresh(false)
 
 func _sync_slider(row: Row, value: float) -> void:
 	row.syncing = true
@@ -159,7 +194,7 @@ func refresh(paused: bool) -> void:
 			pending += 1
 		elif not row.dragging:
 			_sync_slider(row, _catalog.get_parameter(row.key).value)
-	var text: String = "本次运行已修改 %d 次" % _catalog.history.size()
+	var text: String = "本次运行已修改 %d 次" % _catalog.applied_count
 	if pending > 0:
 		text = "%d 项待生效（%s）· %s" % [pending, "暂停中，单步或继续后应用" if paused else "下一模拟步应用", text]
 	_status.text = text

@@ -86,13 +86,15 @@ func new_token() -> int:
 	_next_token += 1
 	return token
 
-func observation_for(target: AgentHandle) -> LocalObservation:
+## Presentation passes the current world tick without advancing this job's clock.
+func observation_for(target: AgentHandle, at_tick: int = -1) -> LocalObservation:
 	if target == null:
 		return null
 	var observation: LocalObservation = observations.get(target.slot)
 	if observation == null or not observation.handle.same_life(target):
 		return null
-	if current_tick >= observation.expires_tick or not coordinator.store.is_active(target):
+	var query_tick: int = current_tick if at_tick < 0 else at_tick
+	if query_tick >= observation.expires_tick or not coordinator.store.is_active(target):
 		return null
 	return observation
 
