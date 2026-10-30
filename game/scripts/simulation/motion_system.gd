@@ -1,6 +1,7 @@
 class_name MotionSystem
 extends RefCounted
 ## Reads only S(n) for steering and writes S(n+1); neighbors never see partial motion.
+const PREFIX_CELLS_PER_AGENT: int = 4
 var _store: AgentStore
 var _grid: SpatialGrid
 var _intents: IntentBuffer
@@ -90,7 +91,11 @@ func _prepare_step() -> void:
 	displacement_sum = 0.0
 	if _config.crowd_motion_enabled:
 		var started_usec: int = Time.get_ticks_usec() if _config.instrument_enabled else 0
-		_crowd_field.rebuild(_store)
+		# Amortize the full-table pass only with enough actors. Both paths count
+		# exactly the same rectangle; this gate changes no steering threshold.
+		var cell_count: int = _crowd_field.columns * _crowd_field.rows
+		var use_prefix: bool = _config.crowd_prefix_counts and _store.count * PREFIX_CELLS_PER_AGENT >= cell_count
+		_crowd_field.rebuild(_store, use_prefix)
 		if _config.instrument_enabled:
 			field_build_usec = Time.get_ticks_usec() - started_usec
 

@@ -51,6 +51,7 @@ func _check(condition: bool, description: String) -> void:
 		push_error(description)
 
 func _run() -> void:
+	_test_prefix_equivalence()
 	_test_sparse_equivalence_and_isolation()
 	_test_hysteresis_and_identity()
 	_test_dense_bounds_and_coincidence()
@@ -202,52 +203,57 @@ func _test_species_and_intent_boundaries() -> void:
 
 func _measure_fixed_input() -> void:
 	const REPETITIONS: int = 20
-	for layout: int in [Layout.SPARSE, Layout.DENSE]:
-		var exact: Fixture = _make_fixture(false, 1000, layout)
-		var field_32: Fixture = _make_fixture(true, 1000, layout, 32.0)
-		var field_24: Fixture = _make_fixture(true, 1000, layout, 24.0)
-		var fixtures: Array[Fixture] = [exact, field_32, field_24]
-		var timings: Array[PackedFloat64Array] = [PackedFloat64Array(), PackedFloat64Array(), PackedFloat64Array()]
-		for fixture: Fixture in fixtures:
-			fixture.grid.rebuild(fixture.store)
-			for warmup: int in range(3):
-				fixture.motion.step(0, fixture.config.fixed_dt)
-		# Rotate execution order, with no publication, so every timed call sees the
-		# same input and the same number of live bodies and actionable intents.
-		for repetition: int in range(REPETITIONS):
-			for order: int in range(fixtures.size()):
-				var variant: int = (repetition + order) % fixtures.size()
+	for count: int in [46, 1000]:
+		for layout: int in [Layout.SPARSE, Layout.DENSE]:
+			var exact: Fixture = _make_fixture(false, count, layout)
+			var field_32: Fixture = _make_fixture(true, count, layout, 32.0)
+			var field_24: Fixture = _make_fixture(true, count, layout, 24.0)
+			var scanned_32: Fixture = _make_fixture(true, count, layout, 32.0)
+			scanned_32.config.crowd_prefix_counts = false
+			var fixtures: Array[Fixture] = [exact, field_32, field_24, scanned_32]
+			var timings: Array[PackedFloat64Array] = []
+			for fixture_index: int in fixtures.size():
+				timings.append(PackedFloat64Array())
+			for fixture: Fixture in fixtures:
+				fixture.grid.rebuild(fixture.store)
+				for warmup: int in range(3):
+					fixture.motion.step(0, fixture.config.fixed_dt)
+			# Rotate execution order, with no publication, so every timed call sees the
+			# same input and the same number of live bodies and actionable intents.
+			for repetition: int in range(REPETITIONS):
+				for order: int in range(fixtures.size()):
+					var variant: int = (repetition + order) % fixtures.size()
+					var fixture: Fixture = fixtures[variant]
+					var started_usec: int = Time.get_ticks_usec()
+					fixture.motion.step(0, fixture.config.fixed_dt)
+					var elapsed_usec: int = Time.get_ticks_usec() - started_usec
+					var samples: PackedFloat64Array = timings[variant]
+					samples.append(float(elapsed_usec))
+					timings[variant] = samples
+			for variant: int in range(fixtures.size()):
 				var fixture: Fixture = fixtures[variant]
-				var started_usec: int = Time.get_ticks_usec()
-				fixture.motion.step(0, fixture.config.fixed_dt)
-				var elapsed_usec: int = Time.get_ticks_usec() - started_usec
 				var samples: PackedFloat64Array = timings[variant]
-				samples.append(float(elapsed_usec))
-				timings[variant] = samples
-		for variant: int in range(fixtures.size()):
-			var fixture: Fixture = fixtures[variant]
-			var samples: PackedFloat64Array = timings[variant]
-			samples.sort()
-			var elapsed_sum: float = 0.0
-			for elapsed: float in samples:
-				elapsed_sum += elapsed
-			# One separately instrumented replay supplies substage times. It is not
-			# mixed with the uninstrumented mean/P95 above.
-			fixture.config.instrument_enabled = true
-			fixture.motion.step(0, fixture.config.fixed_dt)
-			var record: Dictionary = _motion_record(fixture)
-			record["layout"] = Layout.keys()[layout]
-			record["agent_count"] = fixture.store.count
-			record["valid_intent_count"] = fixture.store.count
-			record["species_counts"] = [1000, 0, 0]
-			record["world_size"] = [fixture.config.world_size.x, fixture.config.world_size.y]
-			record["placement"] = "40 columns, 39px spacing" if layout == Layout.SPARSE else "40 columns, 10px spacing"
-			record["repetitions"] = REPETITIONS
-			record["mean_motion_usec"] = elapsed_sum / samples.size()
-			record["p95_motion_usec"] = samples[ceili(samples.size() * 0.95) - 1]
-			record["samples_usec"] = Array(samples)
-			record["next_velocity_rmse_vs_exact"] = _velocity_rmse(exact, fixture)
-			_benchmark_results.append(record)
+				samples.sort()
+				var elapsed_sum: float = 0.0
+				for elapsed: float in samples:
+					elapsed_sum += elapsed
+				# One separately instrumented replay supplies substage times. It is not
+				# mixed with the uninstrumented mean/P95 above.
+				fixture.config.instrument_enabled = true
+				fixture.motion.step(0, fixture.config.fixed_dt)
+				var record: Dictionary = _motion_record(fixture)
+				record["layout"] = Layout.keys()[layout]
+				record["agent_count"] = fixture.store.count
+				record["valid_intent_count"] = fixture.store.count
+				record["species_counts"] = [count, 0, 0]
+				record["world_size"] = [fixture.config.world_size.x, fixture.config.world_size.y]
+				record["placement"] = "%d columns, %dpx spacing" % [40 if count > 100 else 12, 39 if layout == Layout.SPARSE else 10]
+				record["repetitions"] = REPETITIONS
+				record["mean_motion_usec"] = elapsed_sum / samples.size()
+				record["p95_motion_usec"] = samples[ceili(samples.size() * 0.95) - 1]
+				record["samples_usec"] = Array(samples)
+				record["next_velocity_rmse_vs_exact"] = _velocity_rmse(exact, fixture)
+				_benchmark_results.append(record)
 
 func _measure_trajectories() -> void:
 	const TRAJECTORY_TICKS: int = 120
@@ -343,6 +349,8 @@ func _assert_motion_bounds(fixture: Fixture, dense: int) -> void:
 func _motion_record(fixture: Fixture) -> Dictionary:
 	return {
 		"crowd_motion_enabled": fixture.config.crowd_motion_enabled,
+		"crowd_prefix_counts": fixture.config.crowd_prefix_counts,
+		"prefix_counts_active": fixture.motion._crowd_field._use_prefix_counts if fixture.config.crowd_motion_enabled else false,
 		"crowd_cell_size": fixture.config.crowd_cell_size,
 		"crowd_enter_count": fixture.config.crowd_enter_count,
 		"crowd_exit_count": fixture.config.crowd_exit_count,
@@ -393,3 +401,32 @@ func _write_requested_report(report: Dictionary) -> void:
 			_failures += 1
 			return
 		output.store_string(JSON.stringify(report, "  "))
+
+func _test_prefix_equivalence() -> void:
+	for layout: int in [Layout.SPARSE, Layout.DENSE, Layout.COINCIDENT, Layout.CORNER, Layout.CROSSING]:
+		var scanned: Fixture = _make_fixture(true, 480, layout)
+		var prefix: Fixture = _make_fixture(true, 480, layout)
+		scanned.config.crowd_prefix_counts = false
+		for tick: int in 32:
+			scanned.step(tick)
+			prefix.step(tick)
+			_check(scanned.motion.field_agent_count == prefix.motion.field_agent_count, "Prefix counts preserve exact/dense choices and hysteresis")
+			_check(scanned.store.position_next == prefix.store.position_next and scanned.store.velocity_next == prefix.store.velocity_next,
+				"Count acceleration preserves identical motion output on identical inputs")
+			scanned.store.publish_motion()
+			prefix.store.publish_motion()
+		var field: CrowdMotionField = prefix.motion._crowd_field
+		_check(field._use_prefix_counts, "Equivalence fixture exercises prefix table construction")
+		for radius: float in [0.0, 1.0, 32.0, 38.0, 180.0, 2000.0]:
+			for query: int in 100:
+				var position := Vector2(float(query * 37 % 1800) - 100.0, float(query * 71 % 1200) - 100.0)
+				field._prepare_query(position, radius)
+				field._use_prefix_counts = true
+				var actual: int = field._count_candidates()
+				field._use_prefix_counts = false
+				_check(actual == field._count_candidates(), "Prefix rectangle matches direct integer counts at borders and outside the map")
+		# Rebuild after emptying/resetting the world must clear all old sums.
+		prefix.store.reset()
+		field.rebuild(prefix.store, true)
+		field._prepare_query(Vector2.ZERO, 2000.0)
+		_check(field._count_candidates() == 0, "Empty epoch contains no stale prefix counts")

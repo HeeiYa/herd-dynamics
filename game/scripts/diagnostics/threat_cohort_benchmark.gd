@@ -65,6 +65,7 @@ func run(host: Node, options: Dictionary[String, String]) -> int:
 	scenario.wolf_count = 0
 	scenario.dog_count = 0
 	var config := SimulationConfig.new()
+	config.crowd_prefix_counts = options.get("prefix-counts", str(int(config.crowd_prefix_counts))) == "1"
 	config.instrument_enabled = options.get("instrument", "1") == "1"
 	config.compact_flock_knowledge = options.get("compact-flock", "1") == "1"
 	config.shared_cell_candidates = options.get("shared-candidates", str(int(config.shared_cell_candidates))) == "1"
@@ -277,6 +278,7 @@ func _build_summary(seed_value: int, warmup_ticks: int, sample_ticks: int, initi
 		"compact_flock_knowledge": _world.config.compact_flock_knowledge,
 		"shared_cell_candidates": _world.config.shared_cell_candidates,
 		"crowd_motion_enabled": _world.config.crowd_motion_enabled,
+		"crowd_prefix_counts": _world.config.crowd_prefix_counts,
 		"retained_observations_by_species": Array(_world.ai.knowledge_observation_counts()),
 		"engine": Engine.get_version_info(), "debug_build": OS.is_debug_build(),
 		"processor": OS.get_processor_name(), "logical_processors": OS.get_processor_count(),

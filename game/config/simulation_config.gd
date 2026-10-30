@@ -9,6 +9,7 @@ extends Resource
 # default. Either switch can be disabled independently for same-kernel comparisons.
 @export var shared_cell_candidates: bool = false
 @export var crowd_motion_enabled: bool = true
+@export var crowd_prefix_counts: bool = true
 @export var crowd_cell_size: float = 32.0
 @export var crowd_enter_count: int = 24
 @export var crowd_exit_count: int = 16

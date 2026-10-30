@@ -18,6 +18,9 @@ var cell_size: float
 
 var _store: AgentStore
 var _counts: PackedInt32Array = PackedInt32Array()
+var _prefix_counts: PackedInt64Array = PackedInt64Array()
+var _prefix_stride: int
+var _use_prefix_counts: bool = true
 var _position_sums: PackedVector2Array = PackedVector2Array()
 var _radius_sums: PackedFloat32Array = PackedFloat32Array()
 var _sheep_counts: PackedInt32Array = PackedInt32Array()
@@ -40,6 +43,9 @@ func _init(world_size: Vector2, width: float) -> void:
 	rows = ceili(world_size.y / width)
 	var cell_count: int = columns * rows
 	_counts.resize(cell_count)
+	_prefix_stride = columns + 1
+	_prefix_counts.resize(_prefix_stride * (rows + 1))
+	_prefix_counts.fill(0)
 	_position_sums.resize(cell_count)
 	_radius_sums.resize(cell_count)
 	_sheep_counts.resize(cell_count)
@@ -47,8 +53,9 @@ func _init(world_size: Vector2, width: float) -> void:
 	_sheep_velocity_sums.resize(cell_count)
 	_heads.resize(cell_count)
 
-func rebuild(store: AgentStore) -> void:
+func rebuild(store: AgentStore, use_prefix_counts: bool = true) -> void:
 	_store = store
+	_use_prefix_counts = use_prefix_counts
 	_expire_dead_lives()
 	_counts.fill(0)
 	_position_sums.fill(Vector2.ZERO)
@@ -79,6 +86,8 @@ func rebuild(store: AgentStore) -> void:
 			_sheep_position_sums[cell] += position
 			_sheep_velocity_sums[cell] += store.velocity_current[dense]
 		built_agent_count += 1
+	if _use_prefix_counts:
+		_build_prefix_counts()
 	_indexed_life_revision = store.life_revision
 	_indexed_epoch = store.epoch
 
@@ -90,11 +99,7 @@ func uses_dense_sample(dense: int, search_radius: float, enter_count: int, exit_
 	_prepare_query(_store.position_current[dense], search_radius)
 	_prepared_dense = dense
 	_prepared_radius = search_radius
-	var candidate_count: int = 0
-	for y: int in range(_query_min.y, _query_max.y + 1):
-		for x: int in range(_query_min.x, _query_max.x + 1):
-			cell_visits += 1
-			candidate_count += _counts[y * columns + x]
+	var candidate_count: int = _count_candidates()
 	var handle: AgentHandle = _store.handle_at(dense)
 	var was_dense: bool = _dense_lives.has(handle)
 	if candidate_count >= enter_count:
@@ -104,6 +109,34 @@ func uses_dense_sample(dense: int, search_radius: float, enter_count: int, exit_
 		return true
 	_dense_lives.erase(handle)
 	return false
+
+func _build_prefix_counts() -> void:
+	# Zero top row and left column remain untouched. All other entries are
+	# overwritten from this snapshot, including cells that just became empty.
+	for y: int in rows:
+		var row_sum: int = 0
+		var source_row: int = y * columns
+		var previous_row: int = y * _prefix_stride
+		var output_row: int = previous_row + _prefix_stride
+		for x: int in columns:
+			row_sum += _counts[source_row + x]
+			_prefix_counts[output_row + x + 1] = row_sum + _prefix_counts[previous_row + x + 1]
+
+func _count_candidates() -> int:
+	# Count the same clamped rectangle, including self, as the original scan.
+	# This does not replace the later circular neighbor/centroid tests.
+	if _use_prefix_counts:
+		var left: int = _query_min.x
+		var right: int = _query_max.x + 1
+		var top: int = _query_min.y * _prefix_stride
+		var bottom: int = (_query_max.y + 1) * _prefix_stride
+		return _prefix_counts[bottom + right] - _prefix_counts[top + right] - _prefix_counts[bottom + left] + _prefix_counts[top + left]
+	var count: int = 0
+	for y: int in range(_query_min.y, _query_max.y + 1):
+		for x: int in range(_query_min.x, _query_max.x + 1):
+			cell_visits += 1
+			count += _counts[y * columns + x]
+	return count
 
 func query_exact(dense: int, search_radius: float, output: Array[int]) -> void:
 	# Called only after uses_dense_sample returned false for this actor and radius.

@@ -72,6 +72,7 @@ func _run() -> void:
 		"compact_flock_knowledge": world.config.compact_flock_knowledge,
 		"shared_cell_candidates": world.config.shared_cell_candidates,
 		"crowd_motion_enabled": world.config.crowd_motion_enabled,
+		"crowd_prefix_counts": world.config.crowd_prefix_counts,
 		"incremental_render_sort": world.config.incremental_render_sort,
 		"retained_observations_by_species": Array(world.ai.knowledge_observation_counts()),
 		"mode": "headless fixed-step CPU; not rendered FPS",
@@ -183,6 +184,7 @@ func _run_rendered() -> void:
 		"compact_flock_knowledge": world.config.compact_flock_knowledge,
 		"shared_cell_candidates": world.config.shared_cell_candidates,
 		"crowd_motion_enabled": world.config.crowd_motion_enabled,
+		"crowd_prefix_counts": world.config.crowd_prefix_counts,
 		"incremental_render_sort": world.config.incremental_render_sort,
 		"activity_sampling": "Cache and activity columns are last-published-step snapshots, not totals across catch-up steps. moved counts require >0.01 pixel actual displacement.",
 		"retained_observations_by_species": Array(world.ai.knowledge_observation_counts()),
@@ -239,6 +241,7 @@ func _percentile(sorted: Array[float], fraction: float) -> float:
 	return sorted[clampi(ceili(sorted.size() * fraction) - 1, 0, sorted.size() - 1)]
 
 func _configure_backends(config: SimulationConfig) -> void:
+	config.crowd_prefix_counts = _options.get("prefix-counts", str(int(config.crowd_prefix_counts))) == "1"
 	config.incremental_render_sort = _options.get("incremental-sort", str(int(config.incremental_render_sort))) == "1"
 	config.shared_cell_candidates = _options.get("shared-candidates", str(int(config.shared_cell_candidates))) == "1"
 	config.crowd_motion_enabled = _options.get("crowd-field", str(int(config.crowd_motion_enabled))) == "1"
@@ -357,6 +360,7 @@ func _run_threat_scan() -> void:
 				"compact_flock_knowledge": config.compact_flock_knowledge,
 				"shared_cell_candidates": config.shared_cell_candidates,
 				"crowd_motion_enabled": config.crowd_motion_enabled,
+				"crowd_prefix_counts": config.crowd_prefix_counts,
 				"marked_grazing": marked.size(),
 				"spawn_tick": spawn_tick,
 				"geometric_visible_tick": visible_tick,
