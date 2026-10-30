@@ -2,6 +2,7 @@ class_name SimulationConfig
 extends Resource
 ## Durations ending in _ticks use the single fixed simulation clock.
 @export var instrument_enabled: bool = false
+@export var incremental_render_sort: bool = true
 # Keep exact target memories; represent passive flock knowledge as a local sample.
 @export var compact_flock_knowledge: bool = true
 # Candidate sharing remains an experiment; local crowd steering is the measured

@@ -72,6 +72,7 @@ func _run() -> void:
 		"compact_flock_knowledge": world.config.compact_flock_knowledge,
 		"shared_cell_candidates": world.config.shared_cell_candidates,
 		"crowd_motion_enabled": world.config.crowd_motion_enabled,
+		"incremental_render_sort": world.config.incremental_render_sort,
 		"retained_observations_by_species": Array(world.ai.knowledge_observation_counts()),
 		"mode": "headless fixed-step CPU; not rendered FPS",
 		"engine": Engine.get_version_info(), "debug_build": OS.is_debug_build(),
@@ -149,6 +150,8 @@ func _run_rendered() -> void:
 	var min_visible: int = view.visible_count
 	var max_visible: int = view.visible_count
 	var max_backlog: float = 0.0
+	var sort_fallback_frames: int = 0
+	var sort_moves_total: int = 0
 	while float(Time.get_ticks_usec() - start_time) / 1000000.0 < sample_seconds:
 		await RenderingServer.frame_post_draw
 		var now: int = Time.get_ticks_usec()
@@ -159,6 +162,8 @@ func _run_rendered() -> void:
 		min_visible = mini(min_visible, view.visible_count)
 		max_visible = maxi(max_visible, view.visible_count)
 		max_backlog = maxf(max_backlog, runner.accumulator_seconds)
+		sort_fallback_frames += int(view.sort_used_fallback)
+		sort_moves_total += view.sort_moves
 		var row := PackedStringArray([
 			str(world.tick), str(interval_ms), str(runner.cpu_frame_msec),
 			str(view.render_build_usec), str(view.sort_usec),
@@ -178,6 +183,7 @@ func _run_rendered() -> void:
 		"compact_flock_knowledge": world.config.compact_flock_knowledge,
 		"shared_cell_candidates": world.config.shared_cell_candidates,
 		"crowd_motion_enabled": world.config.crowd_motion_enabled,
+		"incremental_render_sort": world.config.incremental_render_sort,
 		"activity_sampling": "Cache and activity columns are last-published-step snapshots, not totals across catch-up steps. moved counts require >0.01 pixel actual displacement.",
 		"retained_observations_by_species": Array(world.ai.knowledge_observation_counts()),
 		"mode": "rendered real scene including observer UI and sampler",
@@ -193,6 +199,7 @@ func _run_rendered() -> void:
 		"fixed_dt": world.config.fixed_dt, "grid_cell_size": world.config.cell_size,
 		"ai_budget_usec_per_render_frame": world.config.ai_budget_usec,
 		"warmup_seconds": warmup_seconds, "sample_wall_seconds": elapsed, "sample_frames": timings.size(),
+		"sort_fallback_frames": sort_fallback_frames, "sort_moves_total": sort_moves_total,
 		"simulation_seconds_per_wall_second": (world.tick - start_tick) * world.config.fixed_dt / elapsed,
 		"frame_p50_ms": _percentile(timings, 0.5), "frame_p95_ms": _percentile(timings, 0.95),
 		"frame_p99_ms": _percentile(timings, 0.99), "frame_max_ms": timings[-1],
@@ -232,6 +239,7 @@ func _percentile(sorted: Array[float], fraction: float) -> float:
 	return sorted[clampi(ceili(sorted.size() * fraction) - 1, 0, sorted.size() - 1)]
 
 func _configure_backends(config: SimulationConfig) -> void:
+	config.incremental_render_sort = _options.get("incremental-sort", str(int(config.incremental_render_sort))) == "1"
 	config.shared_cell_candidates = _options.get("shared-candidates", str(int(config.shared_cell_candidates))) == "1"
 	config.crowd_motion_enabled = _options.get("crowd-field", str(int(config.crowd_motion_enabled))) == "1"
 

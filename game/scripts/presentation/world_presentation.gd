@@ -8,6 +8,8 @@ var visible_count: int = 0
 var capture_visible_count: int = 0
 var render_build_usec: int = 0
 var sort_usec: int = 0
+var sort_moves: int = 0
+var sort_used_fallback: bool = false
 var selected_handle: AgentHandle
 
 class Change extends RefCounted:
@@ -22,6 +24,8 @@ class DrawEntry extends RefCounted:
 	var region: Rect2
 	var tint: Color = Color.WHITE
 	var is_capture: bool = false
+	var visible_frame: int = -1
+	var listed: bool = false
 
 class AnimationState extends RefCounted:
 	var handle: AgentHandle
@@ -73,6 +77,8 @@ var _shadow_capacity: int = 0
 var _epoch: int = -1
 var _observed_tick: int = -1
 var _seed: int = 42
+var _presentation_frame: int = 0
+var _incremental_sort_active: bool = false
 
 func _init(instrumentation: Probes = null) -> void:
 	probes = instrumentation if instrumentation != null else Probes.new()
@@ -100,7 +106,7 @@ func set_selected(handle: AgentHandle) -> void:
 func _clear_epoch() -> void:
 	_epoch = _store.epoch
 	_states.clear()
-	_draw_list.clear()
+	_reset_draw_list()
 	_captures.clear()
 	selected_handle = null
 	_observed_tick = -1
@@ -224,7 +230,7 @@ func present(tick: int, alpha: float, direct: bool = false) -> void:
 		chunk.update_at(display_tick)
 	if probes.enabled:
 		probes.record(Probes.Tag.GRASS, Time.get_ticks_usec() - grass_start)
-	_draw_list.clear()
+	_begin_draw_list()
 	visible_count = 0
 	capture_visible_count = 0
 	var visible_world: Rect2 = get_global_transform_with_canvas().affine_inverse() * get_viewport_rect()
@@ -240,11 +246,11 @@ func present(tick: int, alpha: float, direct: bool = false) -> void:
 		var elapsed_ms: float = (display_tick - state.started_tick) * _config.fixed_dt * 1000.0 + state.phase_ms
 		_prepare_drawing(state.drawing, foot, state.action, state.direction, elapsed_ms)
 		if state.drawing.area.intersects(visible_world):
-			_draw_list.append(state.drawing)
+			_queue_drawing(state.drawing)
 			visible_count += 1
 	_append_captures(display_tick, visible_world)
 	var sort_start: int = Time.get_ticks_usec()
-	_draw_list.sort_custom(_draw_before)
+	_finish_draw_list()
 	sort_usec = Time.get_ticks_usec() - sort_start
 	_update_shadows()
 	_update_selection(interpolation, direct)
@@ -259,6 +265,65 @@ func _prepare_drawing(entry: DrawEntry, foot: Vector2, action: int, direction: i
 	entry.foot = foot
 	entry.region = clip.frame_at(elapsed_ms)
 	entry.area = Rect2(foot - clip.pivot * body_scale, entry.region.size * body_scale)
+
+func _reset_draw_list() -> void:
+	for entry: DrawEntry in _draw_list:
+		entry.listed = false
+	_draw_list.clear()
+
+func _begin_draw_list() -> void:
+	_presentation_frame += 1
+	if _incremental_sort_active != _config.incremental_render_sort:
+		_reset_draw_list()
+		_incremental_sort_active = _config.incremental_render_sort
+	if not _incremental_sort_active:
+		_draw_list.clear()
+
+func _queue_drawing(entry: DrawEntry) -> void:
+	if not _incremental_sort_active:
+		_draw_list.append(entry)
+		return
+	entry.visible_frame = _presentation_frame
+	if not entry.listed:
+		entry.listed = true
+		_draw_list.append(entry)
+
+func _finish_draw_list() -> void:
+	sort_moves = 0
+	sort_used_fallback = false
+	if not _incremental_sort_active:
+		_draw_list.sort_custom(_draw_before)
+		return
+	# Preserve surviving entries in their previous order, including retired-life
+	# capture visuals. Offscreen or expired entries cannot retain membership.
+	var retained: int = 0
+	for entry: DrawEntry in _draw_list:
+		if entry.visible_frame == _presentation_frame:
+			_draw_list[retained] = entry
+			retained += 1
+		else:
+			entry.listed = false
+	_draw_list.resize(retained)
+	_repair_draw_order()
+
+func _repair_draw_order() -> void:
+	# Insertion repair is linear for nearly sorted frames. Bound shifts before
+	# falling back so crossings, spawns and resets never cause quadratic work.
+	var move_budget: int = maxi(32, _draw_list.size() * 4)
+	for index: int in range(1, _draw_list.size()):
+		var entry: DrawEntry = _draw_list[index]
+		var gap: int = index
+		while gap > 0 and _draw_before(entry, _draw_list[gap - 1]):
+			_draw_list[gap] = _draw_list[gap - 1]
+			gap -= 1
+			sort_moves += 1
+			if sort_moves >= move_budget:
+				# Restore the displaced entry before handing the complete list over.
+				_draw_list[gap] = entry
+				_draw_list.sort_custom(_draw_before)
+				sort_used_fallback = true
+				return
+		_draw_list[gap] = entry
 
 static func _draw_before(first: DrawEntry, second: DrawEntry) -> bool:
 	if first.foot.y != second.foot.y:
@@ -346,5 +411,5 @@ func _append_captures(display_tick: float, visible_world: Rect2) -> void:
 			_prepare_drawing(visual.drawing, visual.position, AnimationCatalog.Action.SHEEP_CAPTURED, visual.direction, elapsed_ms)
 		visual.drawing.tint.a = clampf((lifetime_ms - elapsed_ms) / 400.0, 0.0, 1.0)
 		if visual.drawing.area.intersects(visible_world):
-			_draw_list.append(visual.drawing)
+			_queue_drawing(visual.drawing)
 			capture_visible_count += 1

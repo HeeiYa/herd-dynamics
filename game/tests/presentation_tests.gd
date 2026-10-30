@@ -88,6 +88,7 @@ func _test_presentation_contracts() -> void:
 			_check(clip.frame_at(clip.duration_ms + 10000.0) == clip.rectangles.back(), "Non-loop animation holds its last frame")
 	_test_direction_and_capture_lifetimes()
 	_test_mixed_species_order()
+	_test_incremental_order()
 	_test_resume_interpolation()
 
 func _test_resume_interpolation() -> void:
@@ -228,3 +229,51 @@ func _test_mixed_species_order() -> void:
 	var picked: AgentHandle = view.pick(Vector2(200, 202))
 	_check(picked != null and picked.same_life(dog), "Picking checks the reverse global body order")
 	view.queue_free()
+
+func _test_incremental_order() -> void:
+	var view := WorldPresentation.new()
+	view._config = SimulationConfig.new()
+	var entries: Array[WorldPresentation.DrawEntry] = []
+	for index: int in 1000:
+		var entry := WorldPresentation.DrawEntry.new()
+		entry.handle = AgentHandle.new(index % 500, index / 500, 1)
+		entry.is_capture = index >= 500
+		entries.append(entry)
+	var fallback_count: int = 0
+	var samples: Array[Dictionary] = []
+	for frame: int in 120:
+		# Cover both near-continuous movement and adversarial reversals, ties,
+		# disappearing/reappearing drawings, retired lives and backend switches.
+		view._config.incremental_render_sort = frame != 60
+		var expected: Array[WorldPresentation.DrawEntry] = []
+		var started: int = Time.get_ticks_usec()
+		view._begin_draw_list()
+		for index: int in entries.size():
+			var entry: WorldPresentation.DrawEntry = entries[index]
+			entry.foot = Vector2(0, float(index / 3) + sin(frame * 0.1 + index) * 0.4)
+			if frame % 30 == 29:
+				entry.foot.y = -index
+			if (index + frame) % 17 == 0:
+				continue
+			view._queue_drawing(entry)
+			expected.append(entry)
+		view._finish_draw_list()
+		var elapsed: int = Time.get_ticks_usec() - started
+		expected.sort_custom(WorldPresentation._draw_before)
+		_check(view._draw_list == expected, "Incremental order matches full sorting after membership changes and crossings")
+		_check(view.sort_moves <= maxi(32, expected.size() * 4), "Repair work stays bounded before fallback")
+		if view.sort_used_fallback:
+			fallback_count += 1
+		samples.append({"frame": frame, "usec": elapsed, "moves": view.sort_moves, "fallback": view.sort_used_fallback})
+		if frame == 90:
+			view._reset_draw_list()
+			_check(view._draw_list.is_empty(), "Reset drops all cached drawing membership")
+	_check(fallback_count > 0, "Adversarial crossings exercise full-sort fallback")
+	view._reset_draw_list()
+	for entry: WorldPresentation.DrawEntry in entries:
+		_check(not entry.listed, "Removed drawings retain no list membership")
+	view.free()
+	for argument: String in OS.get_cmdline_user_args():
+		if argument.begins_with("--sort-results="):
+			var file: FileAccess = FileAccess.open(argument.trim_prefix("--sort-results="), FileAccess.WRITE)
+			file.store_string(JSON.stringify({"debug_build": OS.is_debug_build(), "samples": samples}, "  "))
