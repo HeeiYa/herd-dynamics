@@ -48,12 +48,17 @@ func _run() -> void:
 	main._refresh_panel()
 	var picked: AgentHandle = view.pick(world.store.position_current[0])
 	_check(picked != null and world.store.is_alive(picked), "Picking returns a live complete handle")
+	await _test_observer_scene(main, world, runner, view)
 	runner.request_pause(false)
 	for frame: int in range(4000):
 		if world.tick >= 600:
 			break
 		await process_frame
 	runner.request_pause(true)
+	# Evidence uses the default layout: detail panel collapsed.
+	if main._panel_open:
+		main._toggle_panel()
+	await process_frame
 	await process_frame
 	await RenderingServer.frame_post_draw
 	for argument: String in OS.get_cmdline_user_args():
@@ -62,11 +67,142 @@ func _run() -> void:
 			DirAccess.make_dir_recursive_absolute(path.get_base_dir())
 			var result: Error = root.get_texture().get_image().save_png(path)
 			_check(result == OK, "Rendered screenshot saved")
+			await _capture_views(main, world, view, path)
 	_test_presentation_contracts()
 	print("PRESENTATION_TESTS failures=%d tick=%d visible=%d" % [_failures, world.tick, view.visible_count])
 	main.queue_free()
 	await process_frame
 	quit(0 if _failures == 0 else 1)
+
+## Real HUD, camera, grab and overlay wiring in the running scene.
+func _test_observer_scene(main: Node2D, world: SimulationWorld, runner: SimulationRunner, view: WorldPresentation) -> void:
+	var camera: ObserverCamera = main._camera
+	var viewport: Rect2 = main.get_viewport_rect()
+	var collapsed: Rect2 = camera.usable_rect()
+	_check(not main._right_panel.visible, "Detail panel starts collapsed")
+	var collapsed_zoom: float = camera.zoom_level
+	main._toggle_panel()
+	await process_frame
+	await process_frame
+	var usable: Rect2 = camera.usable_rect()
+	_check(usable.size.x < collapsed.size.x and camera.zoom_level < collapsed_zoom, "Opening the panel shrinks and refits the pasture")
+	_check(usable.size.x < viewport.size.x and usable.position.y > 0.0, "Docked panels shrink the usable pasture rectangle")
+	_check(main._right_panel.get_global_rect().position.x >= usable.end.x, "Usable area does not extend under the right panel")
+	# A screen point over the right panel is consumed by the GUI.
+	var panel_point: Vector2 = main._right_panel.get_global_rect().get_center()
+	_check(main._right_panel.mouse_filter == Control.MOUSE_FILTER_STOP and main._right_panel.get_global_rect().has_point(panel_point), "Panels stop pointer input from reaching the pasture")
+	_check(main._hud.mouse_filter == Control.MOUSE_FILTER_IGNORE, "Full-screen HUD root never swallows pasture input")
+
+	main._toggle_ui()
+	await process_frame
+	_check(not main._top_bar.visible and main._restore_button.visible and camera.usable_rect().size == viewport.size, "Hiding the UI keeps a visible restore control")
+	main._toggle_ui()
+	await process_frame
+	await process_frame
+	# Picking through camera conversions selects what is drawn under the cursor.
+	var dense: int = -1
+	for candidate: int in world.store.count:
+		if usable.has_point(camera.world_to_screen(world.store.position_current[candidate])):
+			dense = candidate
+			break
+	_check(dense >= 0, "A body is visible in the usable area")
+	if dense < 0:
+		return
+	var handle: AgentHandle = world.store.handle_at(dense)
+	var foot: Vector2 = view.display_foot(handle)
+	var screen: Vector2 = camera.world_to_screen(foot + Vector2(0, -8))
+	_check(view.pick(camera.screen_to_world(screen)) != null, "Screen-space picking through the camera finds a body")
+	main._select(handle)
+	main._follow_selected()
+	_check(camera.mode == ObserverCamera.Mode.FOLLOW, "F follows the selected life")
+	main._refresh_panel()
+	_check(main._inspector._summary.text.contains("原因"), "Character card explains the selected behavior")
+	# Grab while paused: preview first, command applies on the next step.
+	main._set_tool(main.Tool.GRAB)
+	var lifted: bool = main._grab.begin(handle, foot)
+	_check(lifted and world.is_hold_pending(handle) and not world.store.is_held(handle), "Paused grab is a pending preview")
+	runner.request_single_step()
+	await process_frame
+	await process_frame
+	_check(world.store.is_held(handle), "Single step applies the paused hold")
+	var drop_point: Vector2 = world.config.world_size * 0.5
+	main._grab.pointer_world = drop_point
+	main._grab.pointer_valid = true
+	main._grab.release()
+	runner.request_single_step()
+	await process_frame
+	await process_frame
+	_check(not world.store.is_held(handle) and world.store.position_previous[world.store.resolve(handle)] == drop_point, "Release drops at the previewed point on the next step")
+	_check(main._grab.state == GrabTool.State.IDLE, "Grab tool returns to idle after the drop applies")
+	main._set_tool(main.Tool.GRAB)
+	main._grab.begin(handle, drop_point)
+	main._escape()
+	_check(main._grab.state == GrabTool.State.IDLE and not world.is_hold_pending(handle), "Esc withdraws a hold that has not applied yet")
+	main._set_tool(main.Tool.SELECT)
+	main._grab.begin(handle, drop_point)
+	runner.request_single_step()
+	await process_frame
+	await process_frame
+	var prior_epoch: int = world.store.epoch
+	main._reset_scenario()
+	await process_frame
+	await process_frame
+	_check(world.store.epoch > prior_epoch and main._grab.state == GrabTool.State.IDLE and main._selected == null, "Reset ends grab and selection")
+	_check(camera.mode == ObserverCamera.Mode.OVERVIEW and camera.follow_handle == null, "Reset returns the camera to the overview")
+	runner.request_single_step()
+	await process_frame
+	await process_frame
+
+## Extra evidence images next to --capture: selected follow view and hidden UI.
+func _capture_views(main: Node2D, world: SimulationWorld, view: WorldPresentation, path: String) -> void:
+	var wolf: AgentHandle
+	for dense: int in world.store.count:
+		if world.store.species[dense] == SimTypes.Species.WOLF and world.store.held[dense] == 0:
+			wolf = world.store.handle_at(dense)
+			break
+	if wolf != null:
+		main._select(wolf)
+		main._overlay_buttons[&"perception"].button_pressed = true
+		main._sync_overlays()
+		main._follow_selected()
+		main._camera.zoom_at(main._camera.usable_rect().get_center(), 2)
+		main._refresh_panel()
+		for frame: int in 90:
+			await process_frame
+		await RenderingServer.frame_post_draw
+		root.get_texture().get_image().save_png(path.get_basename() + "-follow.png")
+	main._tabs.current_tab = 1
+	await process_frame
+	await RenderingServer.frame_post_draw
+	root.get_texture().get_image().save_png(path.get_basename() + "-tuning.png")
+	main._tabs.current_tab = 0
+	main._camera.show_overview(true)
+	main._toggle_ui()
+	for frame: int in 4:
+		await process_frame
+	await RenderingServer.frame_post_draw
+	root.get_texture().get_image().save_png(path.get_basename() + "-clean.png")
+	main._toggle_ui()
+	# A thousand-body natural pasture, paused after its initial spread.
+	main._layout.select(main._layout.get_item_index(ScenarioConfig.Layout.NATURAL))
+	main._sheep.value = 1000
+	main._wolves.value = 12
+	main._dogs.value = 6
+	main._reset_scenario()
+	# The reset applies on the next frame; do not read the old tick.
+	await process_frame
+	await process_frame
+	main._runner.request_pause(false)
+	for frame: int in 600:
+		if world.tick >= 240:
+			break
+		await process_frame
+	main._runner.request_pause(true)
+	for frame: int in 4:
+		await process_frame
+	await RenderingServer.frame_post_draw
+	_check(world.store.count == 1018, "Thousand-body natural layout spawns completely")
+	root.get_texture().get_image().save_png(path.get_basename() + "-thousand.png")
 
 func _test_presentation_contracts() -> void:
 	var catalog := AnimationCatalog.new()

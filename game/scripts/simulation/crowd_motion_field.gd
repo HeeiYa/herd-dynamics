@@ -72,7 +72,7 @@ func rebuild(store: AgentStore, use_prefix_counts: bool = true) -> void:
 	aggregate_agent_contributions = 0
 	_prepared_dense = -1
 	for dense: int in range(store.count):
-		if store.alive[dense] == 0:
+		if store.alive[dense] == 0 or store.held[dense] != 0:
 			continue
 		var position: Vector2 = store.position_current[dense]
 		var cell: int = _cell_at(position)

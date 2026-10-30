@@ -63,7 +63,8 @@ func rebuild(store: AgentStore) -> void:
 	aggregated_cell_count = 0
 	max_occupancy = 0
 	for dense: int in store.count:
-		if store.alive[dense] == 0:
+		# Held bodies are outside the pasture: nobody can perceive or sample them.
+		if store.alive[dense] == 0 or store.held[dense] != 0:
 			continue
 		var position: Vector2 = store.position_current[dense]
 		var x: int = clampi(floori(position.x / cell_size), 0, columns - 1)

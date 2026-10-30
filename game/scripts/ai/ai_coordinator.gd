@@ -116,6 +116,45 @@ func unregister_agent(handle: AgentHandle) -> void:
 	contexts.erase(handle.slot)
 	_pools[context.species].append(context)
 
+## Stage 0 lift. The tree exits through its normal leaf cleanup, which clears
+## owned intents and releases owned leases; queued jobs become stale entries.
+func suspend_agent(handle: AgentHandle) -> void:
+	var context: AgentContext = _context(handle)
+	if context == null or context.suspended:
+		return
+	context.suspended = true
+	context.player.active = false
+	if context.player.get_bt_instance() != null:
+		context.player.get_bt_instance().get_root_task().abort()
+	coordination.remove(handle)
+	knowledge.remove(handle)
+	intents.remove(handle)
+	context.perception_queued = false
+	context.decision_queued = false
+	context.urgent_queued = false
+	context.decision_ticket += 1
+	# Due-bucket entries compare these ticks, so no old bucket can revive the life.
+	context.next_perception_tick = -1
+	context.next_decision_tick = -1
+	context.task_name = &"Held by observer"
+
+## Stage 0 drop, after the body is relocated. Private memories survive, but the
+## first job is a fresh scan at the new place, followed by a decision.
+func resume_agent(handle: AgentHandle, tick: int) -> void:
+	var context: AgentContext = _context(handle)
+	if context == null or not context.suspended:
+		return
+	context.suspended = false
+	context.player.active = true
+	context.current_tick = tick
+	context.committed_target = null
+	context.prey = null
+	context.wander_until = 0
+	context.facts_dirty = true
+	context.task_name = &"Waiting for first perception"
+	_schedule_perception(context, tick)
+	_schedule_decision(context, tick + 1)
+
 func reset() -> void:
 	for slot: int in contexts:
 		var context: AgentContext = contexts[slot]
@@ -237,7 +276,7 @@ func _enqueue_due(tick: int) -> void:
 		_decision_due.erase(tick)
 
 func _request_urgent(context: AgentContext, tick: int) -> void:
-	if context.urgent_queued:
+	if context.urgent_queued or context.suspended:
 		return
 	context.next_decision_tick = mini(context.next_decision_tick, tick)
 	if not context.decision_queued:
@@ -360,6 +399,20 @@ func notify_capture(actor: AgentHandle, position: Vector2, end_tick: int) -> voi
 	context.committed_target = null
 	coordination.remove(actor)
 	_request_urgent(context, current_tick)
+
+## Read-only observer access to one life's private knowledge. Presentation may
+## explain it but must not mutate it or use it to reach hidden live positions.
+func inspect(handle: AgentHandle) -> AgentContext:
+	if handle == null:
+		return null
+	return _context(handle)
+
+## Strategy and scope changes alter derived facts without a new observation.
+func invalidate_facts() -> void:
+	for slot: int in contexts:
+		var context: AgentContext = contexts[slot]
+		context.facts_dirty = true
+		context.flock_cache_dirty = true
 
 func is_feeding(handle: AgentHandle, tick: int) -> bool:
 	var context: AgentContext = _context(handle)

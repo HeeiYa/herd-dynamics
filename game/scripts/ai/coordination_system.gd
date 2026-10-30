@@ -54,7 +54,7 @@ func request(actor: AgentHandle, target: AgentHandle, kind: Kind, token: int, po
 	_incoming[actor.slot] = request_value
 
 func request_status(actor: AgentHandle, target: AgentHandle, token: int, tick: int) -> RequestStatus:
-	if not _store.is_alive(actor) or not _store.is_alive(target):
+	if not _store.is_active(actor) or not _store.is_active(target):
 		return RequestStatus.INVALID
 	var lease: Lease = get_lease(actor, tick)
 	if lease != null and lease.owner_token == token and lease.target.same_life(target):
@@ -71,7 +71,7 @@ func begin_step(tick: int) -> void:
 	_invalid.clear()
 	for slot: int in leases:
 		var lease: Lease = leases[slot]
-		if tick >= lease.expires_tick or not _store.is_alive(lease.actor) or not _store.is_alive(lease.target):
+		if tick >= lease.expires_tick or not _store.is_active(lease.actor) or not _store.is_active(lease.target):
 			_invalid.append(slot)
 	for slot: int in _invalid:
 		_remove_lease(slot)
@@ -79,7 +79,7 @@ func begin_step(tick: int) -> void:
 	_invalid.clear()
 	for slot: int in _results:
 		var result: Result = _results[slot]
-		if tick >= result.expires_tick or not _store.is_alive(result.request.actor) or not _store.is_alive(result.request.target):
+		if tick >= result.expires_tick or not _store.is_active(result.request.actor) or not _store.is_active(result.request.target):
 			_invalid.append(slot)
 	for slot: int in _invalid:
 		_results.erase(slot)
@@ -89,7 +89,8 @@ func begin_step(tick: int) -> void:
 		if pending.requested_tick >= tick:
 			continue
 		var status: RequestStatus = RequestStatus.INVALID
-		if _store.is_alive(pending.actor) and _store.is_alive(pending.target):
+		# Held lives cannot receive or own a reservation until they are dropped.
+		if _store.is_active(pending.actor) and _store.is_active(pending.target):
 			status = _grant(pending, tick)
 		var result := Result.new()
 		result.request = pending

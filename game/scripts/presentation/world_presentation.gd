@@ -11,6 +11,16 @@ var sort_usec: int = 0
 var sort_moves: int = 0
 var sort_used_fallback: bool = false
 var selected_handle: AgentHandle
+var held_hidden_count: int = 0
+# Display time of the last present() call; overlays align with it.
+var display_tick: float = 0.0
+var display_direct: bool = false
+
+## Published behavior transitions, emitted once per life and change. Only the
+## intent in effect drives it, never a task attempt or an animation frame.
+signal behavior_changed(handle: AgentHandle, species: int, previous: int, current: int, tick: int)
+## The world epoch changed; every life-scoped visual must be dropped.
+signal epoch_cleared
 
 class Change extends RefCounted:
 	var tick: int
@@ -32,6 +42,7 @@ class AnimationState extends RefCounted:
 	var action: int = AnimationCatalog.Action.SHEEP_IDLE
 	var direction: int = 0
 	var latest_action: int = -1
+	var latest_behavior: int = SimTypes.Behavior.IDLE
 	var latest_direction: int = 0
 	var started_tick: int = 0
 	var phase_ms: float = 0.0
@@ -70,7 +81,7 @@ var _catalog: AnimationCatalog = AnimationCatalog.new()
 var _states: Array[AnimationState] = []
 var _draw_list: Array[DrawEntry] = []
 var _captures: Array[CaptureVisual] = []
-var _ground_chunks: Array[GrassChunk] = []
+var _ground: GroundLayer
 var _shadows: MultiMeshInstance2D
 var _selection: SelectionOverlay
 var _shadow_capacity: int = 0
@@ -90,7 +101,10 @@ func setup(store: AgentStore, intents: IntentBuffer, resources: ResourceGrid, co
 	_config = config
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_catalog.load_assets()
-	_create_ground()
+	_ground = GroundLayer.new()
+	_ground.z_index = -3
+	_ground.configure(_resources, _config.world_size, load("res://assets/grass_tile.png") as Texture2D)
+	add_child(_ground)
 	_create_shadows()
 	_selection = SelectionOverlay.new()
 	_selection.z_index = -1
@@ -99,6 +113,8 @@ func setup(store: AgentStore, intents: IntentBuffer, resources: ResourceGrid, co
 
 func set_seed(random_seed: int) -> void:
 	_seed = random_seed
+	if _ground != null:
+		_ground.set_decoration_seed(random_seed)
 
 func set_selected(handle: AgentHandle) -> void:
 	selected_handle = handle if _store != null and _store.is_alive(handle) else null
@@ -110,24 +126,9 @@ func _clear_epoch() -> void:
 	_captures.clear()
 	selected_handle = null
 	_observed_tick = -1
-	for chunk: GrassChunk in _ground_chunks:
-		chunk.levels.fill(-1)
-
-func _create_ground() -> void:
-	var rich: Texture2D = load("res://assets/grass_tile.png") as Texture2D
-	var grazed: Texture2D = load("res://assets/grass_grazed_tile.png") as Texture2D
-	const CHUNK_CELLS: int = 4
-	for top: int in range(0, _resources.rows, CHUNK_CELLS):
-		for left: int in range(0, _resources.columns, CHUNK_CELLS):
-			var indices: PackedInt32Array = PackedInt32Array()
-			for y: int in range(top, mini(top + CHUNK_CELLS, _resources.rows)):
-				for x: int in range(left, mini(left + CHUNK_CELLS, _resources.columns)):
-					indices.append(y * _resources.columns + x)
-			var chunk := GrassChunk.new()
-			chunk.z_index = -3
-			chunk.configure(_resources, indices, rich, grazed, _config.world_size)
-			add_child(chunk)
-			_ground_chunks.append(chunk)
+	if _ground != null:
+		_ground.clear_levels()
+	epoch_cleared.emit()
 
 func _create_shadows() -> void:
 	_shadows = MultiMeshInstance2D.new()
@@ -168,7 +169,17 @@ func observe_published(tick: int) -> void:
 		var action: int = AnimationCatalog.action_for(_store.species[dense], behavior, moving, pressure)
 		if state == null or not state.handle.same_life(handle):
 			state = _new_state(handle, action, _store.facing[dense], maxi(0, tick - 1))
+			state.latest_behavior = behavior
 			_states[handle.slot] = state
+			# A life first seen mid-behavior (its decision ran before the first
+			# publication) still reports that transition once, from IDLE.
+			if behavior != SimTypes.Behavior.IDLE:
+				behavior_changed.emit(handle, _store.species[dense], SimTypes.Behavior.IDLE, behavior, maxi(0, tick - 1))
+		elif behavior != state.latest_behavior:
+			var previous_behavior: int = state.latest_behavior
+			state.latest_behavior = behavior
+			# Decisions made at n drive the interval [n, n+1].
+			behavior_changed.emit(handle, _store.species[dense], previous_behavior, behavior, maxi(0, tick - 1))
 		_record_changes(state, action, _store.facing[dense], tick)
 		state.latest_position = _store.position_current[dense]
 
@@ -224,18 +235,23 @@ func present(tick: int, alpha: float, direct: bool = false) -> void:
 	var started_usec: int = Time.get_ticks_usec()
 	observe_published(tick)
 	var interpolation: float = clampf(alpha, 0.0, 1.0)
-	var display_tick: float = float(tick) if direct else maxf(0.0, tick - 1 + interpolation)
+	display_tick = float(tick) if direct else maxf(0.0, tick - 1 + interpolation)
+	display_direct = direct
 	var grass_start: int = Time.get_ticks_usec() if probes.enabled else 0
-	for chunk: GrassChunk in _ground_chunks:
-		chunk.update_at(display_tick)
+	_ground.update_at(display_tick)
 	if probes.enabled:
 		probes.record(Probes.Tag.GRASS, Time.get_ticks_usec() - grass_start)
 	_begin_draw_list()
 	visible_count = 0
 	capture_visible_count = 0
+	held_hidden_count = 0
 	var visible_world: Rect2 = get_global_transform_with_canvas().affine_inverse() * get_viewport_rect()
 	for dense: int in _store.count:
 		if _store.alive[dense] == 0:
+			continue
+		if _store.held[dense] != 0:
+			# Lifted bodies are drawn by the grab tool, not in the pasture.
+			held_hidden_count += 1
 			continue
 		var handle: AgentHandle = _store.handle_at(dense)
 		var state: AnimationState = _states[handle.slot]
@@ -347,7 +363,8 @@ func _update_shadows() -> void:
 
 func _update_selection(alpha: float, direct: bool) -> void:
 	var dense: int = _store.resolve(selected_handle)
-	_selection.has_selection = dense >= 0
+	# A lifted body keeps its selection, but its ring belongs to the grab preview.
+	_selection.has_selection = dense >= 0 and _store.held[dense] == 0
 	if dense < 0:
 		selected_handle = null
 	else:
@@ -366,9 +383,29 @@ func _draw() -> void:
 func pick(world_point: Vector2) -> AgentHandle:
 	for index: int in range(_draw_list.size() - 1, -1, -1):
 		var entry: DrawEntry = _draw_list[index]
-		if not entry.is_capture and entry.area.has_point(world_point) and _store.is_alive(entry.handle):
+		if not entry.is_capture and entry.area.has_point(world_point) and _store.is_active(entry.handle):
 			return entry.handle
 	return null
+
+## Last displayed foot of a live life, or null once it is dead, removed or
+## reset. A held life keeps the foot where it was lifted.
+func display_foot(handle: AgentHandle) -> Variant:
+	if handle == null or _store == null or not _store.is_alive(handle) or handle.slot >= _states.size():
+		return null
+	var state: AnimationState = _states[handle.slot]
+	if state == null or not state.handle.same_life(handle):
+		return null
+	return state.drawing.foot
+
+## Sprite region and pivot for drawing a life outside the pasture (lifted).
+func body_region(handle: AgentHandle) -> Array:
+	if handle == null or handle.slot >= _states.size():
+		return []
+	var state: AnimationState = _states[handle.slot]
+	if state == null or not state.handle.same_life(handle):
+		return []
+	var clip: AnimationCatalog.Clip = _catalog.get_clip(state.action, state.direction)
+	return [_catalog.texture, clip.frame_at(state.phase_ms), clip.pivot * body_scale]
 
 func add_capture(handle: AgentHandle, position: Vector2, facing: Vector2, tick: int) -> void:
 	if _store == null or handle.world_epoch != _store.epoch:

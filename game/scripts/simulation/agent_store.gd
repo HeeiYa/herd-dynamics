@@ -17,6 +17,10 @@ var radius: PackedFloat32Array = PackedFloat32Array()
 var species: PackedInt32Array = PackedInt32Array()
 var alive: PackedByteArray = PackedByteArray()
 var hunger: PackedFloat32Array = PackedFloat32Array()
+# Nonzero while an observer intervention holds the body outside the pasture.
+# SimulationWorld writes it only at the stage-0 safe point (see set_held).
+var held: PackedByteArray = PackedByteArray()
+var held_count: int = 0
 var slot_to_dense: PackedInt32Array = PackedInt32Array()
 var dense_to_slot: PackedInt32Array = PackedInt32Array()
 var generations: PackedInt64Array = PackedInt64Array()
@@ -42,6 +46,7 @@ func _grow_capacity(required: int) -> void:
 	species.resize(capacity)
 	alive.resize(capacity)
 	hunger.resize(capacity)
+	held.resize(capacity)
 	slot_to_dense.resize(capacity)
 	dense_to_slot.resize(capacity)
 	generations.resize(capacity)
@@ -76,6 +81,7 @@ func create_agent(kind: int, position: Vector2, body_radius: float = 8.0) -> Age
 	species[dense] = kind
 	alive[dense] = 1
 	hunger[dense] = 0.65
+	held[dense] = 0
 	life_revision += 1
 	return handle
 
@@ -100,6 +106,47 @@ func is_alive(handle: AgentHandle) -> bool:
 		return true
 	return resolve(handle) >= 0
 
+## True for a live body that takes part in the pasture: not dead and not held.
+## Spatial indexes, leases and attacks use this instead of bare liveness.
+func is_active(handle: AgentHandle) -> bool:
+	if not is_alive(handle):
+		return false
+	if held_count == 0:
+		return true
+	return held[resolve(handle)] == 0
+
+func is_held(handle: AgentHandle) -> bool:
+	var dense: int = resolve(handle)
+	return dense >= 0 and held[dense] != 0
+
+## Stage 0 only. Holding keeps identity, species and hunger; it removes the body
+## from spatial indexes and interactions until the matching drop command.
+func set_held(handle: AgentHandle, value: bool) -> bool:
+	var dense: int = resolve(handle)
+	if dense < 0:
+		return false
+	var flag: int = 1 if value else 0
+	if held[dense] == flag:
+		return true
+	held[dense] = flag
+	held_count += 1 if value else -1
+	# Grid and fact caches treat holding like a lifecycle change.
+	life_revision += 1
+	return true
+
+## Stage 0 only: a dropped body starts the next step at rest at the new place.
+## All three position buffers agree so presentation cannot interpolate a jump.
+func relocate(handle: AgentHandle, position: Vector2) -> bool:
+	var dense: int = resolve(handle)
+	if dense < 0:
+		return false
+	position_current[dense] = position
+	position_next[dense] = position
+	position_previous[dense] = position
+	velocity_current[dense] = Vector2.ZERO
+	velocity_next[dense] = Vector2.ZERO
+	return true
+
 func handle_at(dense: int) -> AgentHandle:
 	assert(dense >= 0 and dense < count)
 	return _handles[dense]
@@ -116,6 +163,8 @@ func remove_agent(handle: AgentHandle) -> bool:
 	if dense < 0:
 		return false
 	_live_handles.erase(_handles[dense])
+	if held[dense] != 0:
+		held_count -= 1
 	var last: int = count - 1
 	if dense != last:
 		_copy_row(last, dense)
@@ -140,6 +189,7 @@ func _copy_row(source: int, destination: int) -> void:
 	species[destination] = species[source]
 	alive[destination] = alive[source]
 	hunger[destination] = hunger[source]
+	held[destination] = held[source]
 	dense_to_slot[destination] = dense_to_slot[source]
 	_handles[destination] = _handles[source]
 
@@ -161,4 +211,6 @@ func reset() -> void:
 	_free_slots.clear()
 	slot_to_dense.fill(-1)
 	alive.fill(0)
+	held.fill(0)
+	held_count = 0
 	_handles.fill(null)

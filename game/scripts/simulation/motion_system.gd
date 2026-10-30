@@ -35,6 +35,11 @@ func step(tick: int, dt: float) -> void:
 	for dense: int in range(_store.count):
 		if _store.alive[dense] == 0:
 			continue
+		if _store.held[dense] != 0:
+			# A held body has no intent and keeps its last pasture position.
+			_store.position_next[dense] = _store.position_current[dense]
+			_store.velocity_next[dense] = Vector2.ZERO
+			continue
 		var intent: MotionIntent = _intents.get_intent(_store.handle_at(dense), tick)
 		var guidance: Vector2 = _guidance(dense, intent)
 		var desired_velocity: Vector2 = guidance

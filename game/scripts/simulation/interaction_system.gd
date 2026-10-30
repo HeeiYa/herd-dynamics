@@ -45,7 +45,7 @@ func _increase_hunger(dt: float) -> void:
 
 func _accept_intents(tick: int) -> void:
 	for dense: int in range(_store.count):
-		if _store.alive[dense] == 0 or _store.species[dense] != SimTypes.Species.WOLF:
+		if _store.alive[dense] == 0 or _store.held[dense] != 0 or _store.species[dense] != SimTypes.Species.WOLF:
 			continue
 		var actor: AgentHandle = _store.handle_at(dense)
 		var intent: MotionIntent = _intents.get_intent(actor, tick)
@@ -61,6 +61,8 @@ func _accept_intents(tick: int) -> void:
 func _accept_attack(actor: AgentHandle, intent: MotionIntent, tick: int) -> void:
 	var target_dense: int = _store.resolve(intent.target)
 	if target_dense < 0 or _store.species[target_dense] != SimTypes.Species.SHEEP or intent.owner_token <= 0:
+		return
+	if _store.held[target_dense] != 0:
 		return
 	var previous: AttackRequest = _requests.get(actor.slot)
 	if previous != null and previous.actor.same_life(actor):
@@ -81,7 +83,7 @@ func _collect_contacts(tick: int) -> void:
 		var request: AttackRequest = _requests[slot]
 		if not request.is_pending():
 			continue
-		if not _store.is_alive(request.actor) or not _store.is_alive(request.target):
+		if not _store.is_active(request.actor) or not _store.is_active(request.target):
 			request.status = AttackRequest.Status.CANCELLED
 			continue
 		if tick >= request.active_end_tick:
@@ -175,7 +177,7 @@ func _graze(tick: int, dt: float) -> void:
 		_store.hunger[dense] = clampf(_store.hunger[dense] - share, 0.0, 1.0)
 
 func _collect_grazing_demand(dense: int, tick: int, dt: float) -> void:
-	if _store.alive[dense] == 0 or _store.species[dense] != SimTypes.Species.SHEEP:
+	if _store.alive[dense] == 0 or _store.held[dense] != 0 or _store.species[dense] != SimTypes.Species.SHEEP:
 		return
 	var intent: MotionIntent = _intents.get_intent(_store.handle_at(dense), tick)
 	if intent == null or intent.mode != SimTypes.IntentMode.GRAZE:
@@ -200,6 +202,18 @@ func cancel(handle: AgentHandle) -> void:
 	var request: AttackRequest = _requests.get(handle.slot)
 	if request != null and request.actor.same_life(handle) and request.is_pending():
 		request.status = AttackRequest.Status.CANCELLED
+
+## Stage 0 lift: cancel pending attacks by or against this life. The actor's
+## record and cooldown remain, unlike remove(), because the life continues.
+func suspend(handle: AgentHandle) -> void:
+	if handle == null:
+		return
+	for slot: int in _requests:
+		var pending: AttackRequest = _requests[slot]
+		if not pending.is_pending():
+			continue
+		if pending.actor.same_life(handle) or pending.target.same_life(handle):
+			pending.status = AttackRequest.Status.CANCELLED
 
 func get_attack(handle: AgentHandle) -> AttackRequest:
 	if handle == null:

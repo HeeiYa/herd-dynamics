@@ -124,7 +124,7 @@ func _refresh_local_facts(context: AgentContext, tick: int) -> void:
 	for sighting: LocalObservation in context.threat_observations:
 		# Threat views include stale observations to preserve insertion order when
 		# a later report refreshes them. They are validated on every use.
-		if tick >= sighting.expires_tick or not ai.store.is_alive(sighting.handle):
+		if tick >= sighting.expires_tick or not ai.store.is_active(sighting.handle):
 			continue
 		# Every valid candidate can become the next selection when an earlier
 		# candidate expires, including candidates outside today's risk threshold.
@@ -216,7 +216,7 @@ func _reduce_observations(context: AgentContext, tick: int, prune_expired: bool)
 	for slot: int in context.observations:
 		var sighting: LocalObservation = context.observations[slot]
 		if prune_expired:
-			if tick >= sighting.expires_tick or not store.is_alive(sighting.handle) or not _retains_individual(context, sighting.species):
+			if tick >= sighting.expires_tick or not store.is_active(sighting.handle) or not _retains_individual(context, sighting.species):
 				_expired.append(slot)
 				continue
 		if rebuild_threats and sighting.species == threat_species:
@@ -224,7 +224,7 @@ func _reduce_observations(context: AgentContext, tick: int, prune_expired: bool)
 			context.threat_observations.append(sighting)
 		if not collect_flock or sighting.species != SimTypes.Species.SHEEP:
 			continue
-		if not prune_expired and (tick >= sighting.expires_tick or not store.is_alive(sighting.handle)):
+		if not prune_expired and (tick >= sighting.expires_tick or not store.is_active(sighting.handle)):
 			continue
 		flock_sum += sighting.position
 		flock_count += 1
@@ -263,7 +263,7 @@ func _cache_shared_sighting(context: AgentContext, previous: LocalObservation, s
 func merge_shared(context: AgentContext, sighting: LocalObservation, tick: int) -> bool:
 	# Merge only: the broker refreshes facts once after this phase's complete batch.
 	# Checking life here also makes direct callers obey the same stale-slot boundary.
-	if not _retains_individual(context, sighting.species) or tick >= sighting.expires_tick or not context.coordinator.store.is_alive(sighting.handle):
+	if not _retains_individual(context, sighting.species) or tick >= sighting.expires_tick or not context.coordinator.store.is_active(sighting.handle):
 		return false
 	var existing: LocalObservation = context.observations.get(sighting.handle.slot)
 	if existing != null and existing.handle.same_life(sighting.handle) and existing.observed_tick >= sighting.observed_tick:

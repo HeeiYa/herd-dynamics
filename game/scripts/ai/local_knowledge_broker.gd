@@ -69,7 +69,7 @@ func deliver(ai: AICoordinator, tick: int) -> void:
 			pending[retained] = message
 			retained += 1
 			continue
-		if not ai.store.is_alive(message.sender) or not ai.store.is_alive(message.recipient) or not ai.store.is_alive(message.sighting.handle):
+		if not ai.store.is_active(message.sender) or not ai.store.is_active(message.recipient) or not ai.store.is_active(message.sighting.handle):
 			continue
 		var recipient: AgentContext = ai.contexts.get(message.recipient.slot)
 		if recipient == null or not recipient.handle.same_life(message.recipient):

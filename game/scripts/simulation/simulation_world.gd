@@ -2,6 +2,18 @@ class_name SimulationWorld
 extends Node
 ## Orchestrates stage ownership. Strategies live in the three behavior trees.
 signal captured(event: CaptureEvent)
+## Emitted at stage 0 after observer commands change the world. Presentation
+## uses it to clear "pending" labels; it carries no simulation authority.
+signal observer_commands_applied(tick: int)
+
+class DropCommand extends RefCounted:
+	var handle: AgentHandle
+	var position: Vector2
+
+class PlaceCommand extends RefCounted:
+	var species: int
+	var position: Vector2
+
 var probes: Probes
 var config: SimulationConfig
 var scenario: ScenarioConfig
@@ -17,7 +29,14 @@ var capture_count: int = 0
 var phase_usec: PackedInt64Array = PackedInt64Array([0, 0, 0, 0, 0, 0, 0])
 var pending_spawns: PackedInt32Array = PackedInt32Array([0, 0, 0])
 var _pending_removals: Array[AgentHandle] = []
+var _pending_holds: Array[AgentHandle] = []
+var _pending_drops: Array[DropCommand] = []
+var _pending_places: Array[PlaceCommand] = []
+var _pending_tuning: Array[TuningCatalog.Change] = []
 var _random := RandomNumberGenerator.new()
+# Planned layouts own their placement stream; V1 layouts keep _random.
+var spawn_planner: SpawnPlanner
+var tuning: TuningCatalog
 
 func setup(settings: SimulationConfig, initial: ScenarioConfig) -> void:
 	config = settings
@@ -27,6 +46,7 @@ func setup(settings: SimulationConfig, initial: ScenarioConfig) -> void:
 	ai = AICoordinator.new(probes)
 	add_child(ai)
 	ai.setup(store, grid, resources, intents, config)
+	tuning = TuningCatalog.new(config, ai.settings)
 	motion = MotionSystem.new()
 	motion.setup(store, grid, intents, config)
 	interaction = InteractionSystem.new()
@@ -45,6 +65,10 @@ func reset(initial: ScenarioConfig) -> void:
 	tick = 0
 	capture_count = 0
 	_pending_removals.clear()
+	_pending_holds.clear()
+	_pending_drops.clear()
+	_pending_places.clear()
+	spawn_planner = SpawnPlanner.new(config, scenario) if ScenarioConfig.is_planned(scenario.layout) else null
 	pending_spawns = PackedInt32Array([scenario.sheep_count, scenario.wolf_count, scenario.dog_count])
 	phase_usec.fill(0)
 
@@ -56,6 +80,52 @@ func queue_remove(handle: AgentHandle) -> void:
 	if handle != null:
 		_pending_removals.append(handle)
 
+## Observer intervention: lift one life out of the pasture at the next stage 0.
+func queue_hold(handle: AgentHandle) -> void:
+	if handle != null:
+		_pending_holds.append(handle)
+
+## Observer intervention: put a held life down at the next stage 0. A drop
+## queued in the same frame as its hold is applied after that hold.
+func queue_drop(handle: AgentHandle, position: Vector2) -> void:
+	if handle == null:
+		return
+	var command := DropCommand.new()
+	command.handle = handle
+	command.position = position
+	_pending_drops.append(command)
+
+## Cancels a hold that has not reached stage 0 yet. Returns false once applied.
+func cancel_pending_hold(handle: AgentHandle) -> bool:
+	for index: int in range(_pending_holds.size() - 1, -1, -1):
+		if _pending_holds[index].same_life(handle):
+			_pending_holds.remove_at(index)
+			return true
+	return false
+
+func queue_place(species: int, position: Vector2) -> void:
+	assert(species >= 0 and species <= SimTypes.Species.DOG)
+	var command := PlaceCommand.new()
+	command.species = species
+	command.position = position
+	_pending_places.append(command)
+
+## Parameter changes take effect at the next stage 0, never inside a step.
+func queue_tuning(change: TuningCatalog.Change) -> void:
+	_pending_tuning.append(change)
+
+func has_pending_observer_commands() -> bool:
+	return not (_pending_holds.is_empty() and _pending_drops.is_empty() and _pending_places.is_empty() and _pending_tuning.is_empty())
+
+func has_pending_tuning() -> bool:
+	return not _pending_tuning.is_empty()
+
+func is_hold_pending(handle: AgentHandle) -> bool:
+	for pending: AgentHandle in _pending_holds:
+		if pending.same_life(handle):
+			return true
+	return false
+
 func create_at(species: int, position: Vector2) -> AgentHandle:
 	# Stage 0 and isolated fixtures only. Runtime UI queues commands instead.
 	var handle: AgentHandle = store.create_agent(species, position, config.agent_radius)
@@ -63,6 +133,13 @@ func create_at(species: int, position: Vector2) -> AgentHandle:
 	return handle
 
 func _spawn_position(species: int) -> Vector2:
+	if spawn_planner != null:
+		return spawn_planner.next_position(species)
+	return _legacy_spawn_position(species)
+
+## V1 placement for PASTURE / TWO_FLOCKS / CROWDED. Frozen so recorded
+## benchmarks keep their initial conditions; new layouts use SpawnPlanner.
+func _legacy_spawn_position(species: int) -> Vector2:
 	var center: Vector2 = config.world_size * Vector2(0.45, 0.5)
 	if scenario.layout == ScenarioConfig.Layout.TWO_FLOCKS:
 		center = config.world_size * (Vector2(0.3, 0.35) if _random.randf() < 0.5 else Vector2(0.7, 0.65))
@@ -81,6 +158,7 @@ func _apply_commands() -> void:
 	for handle: AgentHandle in _pending_removals:
 		_remove(handle)
 	_pending_removals.clear()
+	var observer_changed: bool = _apply_observer_commands()
 	var allowance: int = config.spawn_per_tick
 	for species: int in range(3):
 		var amount: int = mini(allowance, pending_spawns[species])
@@ -88,6 +166,44 @@ func _apply_commands() -> void:
 			create_at(species, _spawn_position(species))
 		pending_spawns[species] -= amount
 		allowance -= amount
+	if observer_changed:
+		observer_commands_applied.emit(tick)
+
+func _apply_observer_commands() -> bool:
+	var changed: bool = has_pending_observer_commands()
+	for change: TuningCatalog.Change in _pending_tuning:
+		tuning.apply(change, tick)
+	if not _pending_tuning.is_empty():
+		# Radii and policy distances feed cached facts; rebuild them once.
+		ai.invalidate_facts()
+	_pending_tuning.clear()
+	for handle: AgentHandle in _pending_holds:
+		_hold(handle)
+	_pending_holds.clear()
+	for command: DropCommand in _pending_drops:
+		_drop(command.handle, command.position)
+	_pending_drops.clear()
+	for command: PlaceCommand in _pending_places:
+		var body: float = config.agent_radius
+		create_at(command.species, command.position.clamp(Vector2.ONE * body, config.world_size - Vector2.ONE * body))
+	_pending_places.clear()
+	return changed
+
+func _hold(handle: AgentHandle) -> void:
+	# A dead, removed or recycled life simply has nothing to lift.
+	if not store.is_active(handle):
+		return
+	store.set_held(handle, true)
+	interaction.suspend(handle)
+	ai.suspend_agent(handle)
+
+func _drop(handle: AgentHandle, position: Vector2) -> void:
+	if not store.is_held(handle):
+		return
+	var body: float = store.radius[store.resolve(handle)]
+	store.relocate(handle, position.clamp(Vector2.ONE * body, config.world_size - Vector2.ONE * body))
+	store.set_held(handle, false)
+	ai.resume_agent(handle, tick)
 
 func _remove(handle: AgentHandle) -> void:
 	# Coordinator invalidates ownership before the slot can be reused.
@@ -133,5 +249,15 @@ func counts() -> PackedInt32Array:
 	var result := PackedInt32Array([0, 0, 0])
 	for dense: int in range(store.count):
 		if store.alive[dense] != 0:
+			result[store.species[dense]] += 1
+	return result
+
+## Live bodies currently held out of the pasture by the observer, per species.
+func held_counts() -> PackedInt32Array:
+	var result := PackedInt32Array([0, 0, 0])
+	if store.held_count == 0:
+		return result
+	for dense: int in range(store.count):
+		if store.alive[dense] != 0 and store.held[dense] != 0:
 			result[store.species[dense]] += 1
 	return result

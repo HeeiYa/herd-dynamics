@@ -57,6 +57,9 @@ var decision_queued: bool = false
 var urgent_queued: bool = false
 # Distinguishes successive pending requests for one life, including promotion.
 var decision_ticket: int = 0
+# An observer intervention holds this life outside the pasture. While set, the
+# tree is inactive and no perception or decision job is scheduled.
+var suspended: bool = false
 var current_tick: int = 0
 var last_decision_tick: int = 0
 var last_perception_tick: int = -1
@@ -89,7 +92,7 @@ func observation_for(target: AgentHandle) -> LocalObservation:
 	var observation: LocalObservation = observations.get(target.slot)
 	if observation == null or not observation.handle.same_life(target):
 		return null
-	if current_tick >= observation.expires_tick or not coordinator.store.is_alive(target):
+	if current_tick >= observation.expires_tick or not coordinator.store.is_active(target):
 		return null
 	return observation
 
@@ -148,4 +151,5 @@ func clear_runtime() -> void:
 	perception_queued = false
 	decision_queued = false
 	urgent_queued = false
+	suspended = false
 	decision_ticket += 1
