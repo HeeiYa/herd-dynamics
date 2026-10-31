@@ -121,14 +121,16 @@ func _run_rendered() -> void:
 	get_tree().current_scene = main
 	await get_tree().process_frame
 	await get_tree().process_frame
-	main._seed.value = int(_options.get("seed", "42"))
-	main._sheep.value = int(_options.get("sheep", str(main._world.scenario.sheep_count)))
-	main._wolves.value = int(_options.get("wolves", str(main._world.scenario.wolf_count)))
-	main._dogs.value = int(_options.get("dogs", str(main._world.scenario.dog_count)))
-	main._layout.select(int(_options.get("layout", "0")))
-	main._reset_scenario()
-	main._zoom = float(_options.get("view-scale", str(main._zoom)))
-	main._fit_camera()
+	var initial := ScenarioConfig.new()
+	initial.random_seed = int(_options.get("seed", "42"))
+	initial.sheep_count = int(_options.get("sheep", str(main._world.scenario.sheep_count)))
+	initial.wolf_count = int(_options.get("wolves", str(main._world.scenario.wolf_count)))
+	initial.dog_count = int(_options.get("dogs", str(main._world.scenario.dog_count)))
+	initial.layout = int(_options.get("layout", "0")) as ScenarioConfig.Layout
+	main.observer.apply_scenario(initial)
+	main.observer.reset_scenario()
+	main.observer._zoom = float(_options.get("view-scale", str(main.observer._zoom)))
+	main.observer.fit_camera()
 	var world: SimulationWorld = main._world
 	world.config.ai_budget_usec = int(_options.get("ai-budget-usec", str(world.config.ai_budget_usec)))
 	world.config.compact_flock_knowledge = _options.get("compact-flock", "1") == "1"

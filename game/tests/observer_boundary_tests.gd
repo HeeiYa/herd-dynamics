@@ -116,9 +116,11 @@ func _start_slider_drag(row: TuningPanel.Row, fraction: float) -> Vector2:
 
 func _test_slider_input() -> void:
 	var world: SimulationWorld = _world()
-	var panel := TuningPanel.new()
+	var panel: TuningPanel = preload("res://scenes/ui/tuning_panel.tscn").instantiate() as TuningPanel
 	root.add_child(panel)
-	panel.setup(world)
+	panel.setup(world.tuning, world.queue_tuning)
+	world.observer_commands_applied.connect(func(_tick: int) -> void: panel._clear_pending())
+	world.observer_reset.connect(panel._on_reset)
 	panel.size.x = 400.0
 	var overlay := InsightOverlay.new()
 	panel.range_preview_changed.connect(overlay.set_range_preview)
@@ -164,10 +166,11 @@ func _test_observation_clock() -> void:
 	world.tick = 20
 	_check(context.observation_for(sheep) == sighting, "Fixture's last job clock precedes expiration")
 	_check(context.observation_for(sheep, world.tick) == null, "Read-only observation expires against the supplied world tick")
-	var inspector := AgentInspector.new()
+	var inspector: AgentInspector = preload("res://scenes/ui/agent_inspector.tscn").instantiate() as AgentInspector
+	var presenter := AgentInspectorPresenter.new(inspector)
 	var intent := MotionIntent.new()
 	intent.target = sheep
-	_check(inspector._target_text(world, context, intent).contains("已失效"), "Inspector explains expired knowledge while the job is delayed")
+	_check(presenter._target_text(world, context, intent).contains("已失效"), "Inspector explains expired knowledge while the job is delayed")
 	_check(context.current_tick == 5, "Inspection never advances the AI clock")
 	sighting.expires_tick = 30
 	world.store.relocate(sheep, Vector2(1400, 900))

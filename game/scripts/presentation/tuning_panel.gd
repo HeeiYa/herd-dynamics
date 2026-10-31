@@ -5,10 +5,10 @@ signal range_preview_changed(key: TuningCatalog.Param, radius: float, active: bo
 ## change) submits one TuningCatalog.Change to the world, which applies it at
 ## the next stage 0. While paused, submitted values show as pending.
 
-var _world: SimulationWorld
+var _submit_change: Callable
 var _catalog: TuningCatalog
 var _rows: Array[Row] = []
-var _status: Label
+@onready var _status: Label = $Status
 
 class Row extends RefCounted:
 	var key: TuningCatalog.Param
@@ -23,89 +23,35 @@ class Row extends RefCounted:
 	# A reset discards the gesture until its release; no edit leaks into the new epoch.
 	var discard_drag: bool = false
 
-func setup(world: SimulationWorld) -> void:
-	_world = world
-	_catalog = world.tuning
-	add_theme_constant_override("separation", 4)
-	var intro := Label.new()
-	intro.text = "拖动预览，松开后提交；下一固定步应用配置，速度在角色下次决策后体现。重置保留已应用值，丢弃待生效修改。"
-	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	intro.add_theme_font_size_override("font_size", 12)
-	intro.modulate = UiStyle.INK_SOFT
-	add_child(intro)
+func setup(catalog: TuningCatalog, submit_change: Callable) -> void:
+	_catalog = catalog
+	_submit_change = submit_change
 	for parameter: TuningCatalog.Parameter in _catalog.parameters:
 		_add_row(parameter)
-	var footer := HBoxContainer.new()
-	var restore := Button.new()
-	restore.text = "全部恢复默认"
-	restore.focus_mode = Control.FOCUS_NONE
-	restore.pressed.connect(_restore_all)
-	footer.add_child(restore)
-	add_child(footer)
-	_status = Label.new()
-	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_status.add_theme_font_size_override("font_size", 12)
-	add_child(_status)
-	world.observer_commands_applied.connect(func(_tick: int) -> void: _clear_pending())
-	world.observer_reset.connect(_on_reset)
+	$Footer/Restore.pressed.connect(_restore_all)
 	refresh(false)
 
 func _add_row(parameter: TuningCatalog.Parameter) -> void:
+	var editor: Control = preload("res://scenes/ui/parameter_row.tscn").instantiate() as Control
+	$Rows.add_child(editor)
 	var row := Row.new()
 	row.key = parameter.key
-	add_child(HSeparator.new())
-	var header := HBoxContainer.new()
-	var name_label := Label.new()
-	name_label.text = parameter.label
-	name_label.tooltip_text = parameter.description
-	name_label.mouse_filter = Control.MOUSE_FILTER_PASS
-	header.add_child(name_label)
-	row.marker = Label.new()
-	row.marker.add_theme_color_override("font_color", UiStyle.ACCENT)
-	row.marker.tooltip_text = "已修改"
-	row.marker.mouse_filter = Control.MOUSE_FILTER_PASS
-	header.add_child(row.marker)
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_child(spacer)
-	var scope := Label.new()
-	scope.text = parameter.scope
-	scope.add_theme_font_size_override("font_size", 11)
-	scope.modulate = UiStyle.INK_SOFT
-	header.add_child(scope)
-	add_child(header)
-	var description := Label.new()
-	description.text = parameter.description
-	description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	description.add_theme_font_size_override("font_size", 11)
-	description.modulate = UiStyle.INK_SOFT
-	add_child(description)
-	var line := HBoxContainer.new()
-	row.slider = HSlider.new()
+	(editor.get_node("Header/Name") as Label).text = parameter.label
+	(editor.get_node("Header/Scope") as Label).text = parameter.scope
+	(editor.get_node("Description") as Label).text = parameter.description
+	row.marker = editor.get_node("Header/Marker") as Label
+	row.slider = editor.get_node("Editor/Slider") as HSlider
+	row.value_label = editor.get_node("Editor/Value") as Label
 	row.slider.min_value = parameter.minimum
 	row.slider.max_value = parameter.maximum
 	row.slider.step = parameter.step
 	row.slider.value = parameter.value
-	row.slider.focus_mode = Control.FOCUS_NONE
-	# Wheel input scrolls the panel instead of silently editing parameters.
-	row.slider.scrollable = false
-	row.slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.slider.drag_started.connect(func() -> void: _begin_drag(row))
 	row.slider.drag_ended.connect(func(changed: bool) -> void: _end_drag(row, changed))
 	row.slider.value_changed.connect(func(value: float) -> void: _on_value(row, value))
-	line.add_child(row.slider)
-	row.value_label = Label.new()
-	row.value_label.custom_minimum_size.x = 78
-	row.value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	line.add_child(row.value_label)
-	var reset := Button.new()
-	reset.text = "↺"
+	var reset: Button = editor.get_node("Editor/Reset") as Button
 	reset.tooltip_text = "恢复默认值 %s" % _catalog.format_value(parameter.key, parameter.default_value)
-	reset.focus_mode = Control.FOCUS_NONE
 	reset.pressed.connect(func() -> void: _submit(row, parameter.default_value))
-	line.add_child(reset)
-	add_child(line)
 	_rows.append(row)
 
 func _on_value(row: Row, value: float) -> void:
@@ -143,7 +89,7 @@ func _submit(row: Row, value: float) -> void:
 		_sync_slider(row, value)
 		range_preview_changed.emit(row.key, value, row.pending)
 		return
-	if not _world.queue_tuning(TuningCatalog.Change.new(row.key, value)):
+	if not _submit_change.call(TuningCatalog.Change.new(row.key, value)):
 		return
 	row.pending = true
 	row.pending_value = value

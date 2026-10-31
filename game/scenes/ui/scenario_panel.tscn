@@ -1,0 +1,125 @@
+[gd_scene format=3]
+
+[node name="Scenario" type="VBoxContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
+
+[node name="Label182" type="Label" parent="."]
+modulate = Color(0.47843137, 0.41568628, 0.33333334, 1)
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "初始条件只在“重置”时应用。V1 基准布局保持旧版位置算法，供历史测量对照。"
+autowrap_mode = 3
+
+[node name="Layout" type="OptionButton" parent="."]
+layout_mode = 2
+focus_mode = 0
+selected = 3
+item_count = 6
+popup/item_0/text = "常态牧场（V1 基准）"
+popup/item_0/id = 0
+popup/item_1/text = "双羊群（V1 基准）"
+popup/item_1/id = 1
+popup/item_2/text = "拥挤压力测试（V1 基准）"
+popup/item_2/id = 2
+popup/item_3/text = "自然牧场"
+popup/item_3/id = 3
+popup/item_4/text = "分散放牧"
+popup/item_4/id = 4
+popup/item_5/text = "多群与威胁"
+popup/item_5/id = 5
+
+[node name="SeedRow" type="HBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="Label195" type="Label" parent="SeedRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "种子"
+
+[node name="Seed" type="SpinBox" parent="SeedRow"]
+custom_minimum_size = Vector2(128, 0)
+layout_mode = 2
+max_value = 999999.0
+value = 42.0
+
+[node name="SheepRow" type="HBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="Label200" type="Label" parent="SheepRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "初始羊数"
+
+[node name="Sheep" type="SpinBox" parent="SheepRow"]
+custom_minimum_size = Vector2(128, 0)
+layout_mode = 2
+max_value = 10000.0
+value = 40.0
+
+[node name="WolvesRow" type="HBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="Label205" type="Label" parent="WolvesRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "初始狼数"
+
+[node name="Wolves" type="SpinBox" parent="WolvesRow"]
+custom_minimum_size = Vector2(128, 0)
+layout_mode = 2
+max_value = 1000.0
+value = 4.0
+
+[node name="DogsRow" type="HBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="Label210" type="Label" parent="DogsRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "初始犬数"
+
+[node name="Dogs" type="SpinBox" parent="DogsRow"]
+custom_minimum_size = Vector2(128, 0)
+layout_mode = 2
+max_value = 1000.0
+value = 2.0
+
+[node name="ResetScenario" type="Button" parent="."]
+layout_mode = 2
+focus_mode = 0
+text = "按这些初始条件重置 (R)"
+
+[node name="PlannerLabel" type="Label" parent="."]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "当前布局：2 个羊群 · 密度系数 1.00 · 1 个扩展到空闲区域"
+autowrap_mode = 3
+
+[node name="HSeparator216" type="HSeparator" parent="."]
+layout_mode = 2
+
+[node name="Label217" type="Label" parent="."]
+modulate = Color(0.47843137, 0.41568628, 0.33333334, 1)
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "运行中加入（下一模拟步生效）"
+
+[node name="SpawnActions" type="HBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="SpawnSheep" type="Button" parent="SpawnActions"]
+layout_mode = 2
+focus_mode = 0
+text = "+20 羊"
+
+[node name="SpawnWolves" type="Button" parent="SpawnActions"]
+layout_mode = 2
+focus_mode = 0
+text = "+3 狼"
+
+[node name="SpawnDog" type="Button" parent="SpawnActions"]
+layout_mode = 2
+focus_mode = 0
+text = "+1 犬"

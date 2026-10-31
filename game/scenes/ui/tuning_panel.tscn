@@ -1,0 +1,33 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/presentation/tuning_panel.gd" id="script"]
+
+[node name="Tuning" type="VBoxContainer"]
+script = ExtResource("script")
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+
+[node name="Introduction" type="Label" parent="."]
+modulate = Color(0.47843137, 0.41568628, 0.33333334, 1)
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "拖动预览，松开后提交；下一固定步应用配置，速度在角色下次决策后体现。重置保留已应用值，丢弃待生效修改。"
+autowrap_mode = 3
+
+[node name="Rows" type="VBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="Footer" type="HBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="Restore" type="Button" parent="Footer"]
+layout_mode = 2
+focus_mode = 0
+text = "全部恢复默认"
+
+[node name="Status" type="Label" parent="."]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "本次运行已修改 0 次"
+autowrap_mode = 3

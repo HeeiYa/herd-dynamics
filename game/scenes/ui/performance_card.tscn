@@ -1,0 +1,56 @@
+[gd_scene format=3]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_8jghc"]
+content_margin_left = 12.0
+content_margin_top = 10.0
+content_margin_right = 12.0
+content_margin_bottom = 10.0
+bg_color = Color(0.95686275, 0.9254902, 0.8627451, 0.88)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.8039216, 0.7254902, 0.58431375, 1)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+shadow_color = Color(0.1, 0.08, 0.04, 0.22)
+shadow_size = 6
+shadow_offset = Vector2(0, 2)
+
+[node name="PerfCard" type="PanelContainer"]
+layout_mode = 0
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 10.0
+offset_top = -10.0
+offset_right = 10.0
+offset_bottom = -10.0
+grow_vertical = 0
+theme_override_styles/panel = SubResource("StyleBoxFlat_8jghc")
+
+[node name="Content" type="VBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="Header" type="HBoxContainer" parent="Content"]
+layout_mode = 2
+
+[node name="PerfSummary" type="Label" parent="Content/Header"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "帧 P95 0.0 ms · 可见 0"
+
+[node name="ExpandPerformance" type="Button" parent="Content/Header"]
+layout_mode = 2
+tooltip_text = "展开/收起性能详情"
+focus_mode = 0
+toggle_mode = true
+text = "▴"
+
+[node name="Stats" type="Label" parent="Content"]
+visible = false
+layout_mode = 2
+tooltip_text = "逾期是已执行任务超过计划时间的累计最大值，重置时清零；不包含仍未服务的队列，也不等于威胁出现至行动的完整响应时间。"
+mouse_filter = 1
+theme_override_font_sizes/font_size = 12
