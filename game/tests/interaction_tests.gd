@@ -15,6 +15,7 @@ class Fixture extends RefCounted:
 		config.attack_window_ticks = 2
 		config.attack_cooldown_ticks = 5
 		config.hunger_rate = 0.0
+		config.sheep_metabolism = 0.0
 		config.grass_recovery_rate = 0.0
 		resources = ResourceGrid.new(config)
 		interaction.setup(store, resources, intents, config)

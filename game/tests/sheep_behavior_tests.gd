@@ -30,6 +30,8 @@ func _run() -> void:
 func _new_world() -> SimulationWorld:
 	var config := SimulationConfig.new()
 	config.ai_budget_usec = 100000
+	# These established commitment fixtures place food two cells away.
+	config.forage_cell_radius = 2
 	config.grass_recovery_rate = 0.0
 	var scenario := ScenarioConfig.new()
 	scenario.sheep_count = 0
@@ -75,6 +77,7 @@ func _test_resource_geometry() -> void:
 func _test_consumption_geometry() -> void:
 	var config := SimulationConfig.new()
 	config.hunger_rate = 0.0
+	config.sheep_metabolism = 0.0
 	config.grass_recovery_rate = 0.0
 	var store := AgentStore.new()
 	var intents := IntentBuffer.new()
@@ -229,6 +232,7 @@ func _test_satiety_cycle() -> void:
 func _test_regroup_hysteresis() -> void:
 	var world: SimulationWorld = _new_world()
 	world.config.hunger_rate = 0.0
+	world.config.sheep_metabolism = 0.0
 	var sheep: AgentHandle = world.create_at(SimTypes.Species.SHEEP, Vector2(600, 500))
 	world.store.hunger[world.store.resolve(sheep)] = 0.0
 	for index: int in range(8):

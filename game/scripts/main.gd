@@ -28,7 +28,13 @@ func _initialize() -> void:
 	add_child(_world)
 	var scenario := ScenarioConfig.new()
 	scenario.layout = ScenarioConfig.Layout.NATURAL
-	_world.setup(SimulationConfig.new(), scenario)
+	var config := SimulationConfig.new()
+	for argument: String in OS.get_cmdline_user_args():
+		if argument == "--spatial=dense":
+			config.spatial_backend = SimulationConfig.SpatialBackend.DENSE
+		elif argument == "--spatial=sparse":
+			config.spatial_backend = SimulationConfig.SpatialBackend.SPARSE
+	_world.setup(config, scenario)
 	_view = WorldPresentation.new(_world.probes)
 	add_child(_view)
 	_view.setup(_world.store, _world.intents, _world.resources, _world.config)

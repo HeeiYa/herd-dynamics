@@ -42,8 +42,11 @@ var tuning: TuningCatalog
 
 func setup(settings: SimulationConfig, initial: ScenarioConfig) -> void:
 	config = settings
+	assert(initial != null and initial.validated_copy() != null)
+	if initial.pasture != null:
+		initial.pasture.apply_to(config)
 	probes = Probes.new(config.instrument_enabled)
-	grid = SpatialGrid.new(config.world_size, config.cell_size)
+	grid = SpatialGrid.new(config.world_size, config.cell_size, config.use_sparse_spatial())
 	resources = ResourceGrid.new(config)
 	ai = AICoordinator.new(probes)
 	add_child(ai)
@@ -56,12 +59,21 @@ func setup(settings: SimulationConfig, initial: ScenarioConfig) -> void:
 	reset(initial)
 
 func reset(initial: ScenarioConfig) -> void:
-	# Called only at a render-frame safe boundary, never in the middle of a step.
+	assert(initial != null and initial.validated_copy() != null, "Reset requires a validated owned scenario")
+	# Called only at the owning executor's safe boundary, never during a step.
 	ai.reset()
 	interaction.reset()
 	intents.clear()
 	store.reset()
-	scenario = initial.duplicate() as ScenarioConfig
+	scenario = initial.duplicate(true) as ScenarioConfig
+	if scenario.pasture != null:
+		scenario.pasture.apply_to(config)
+	grid = SpatialGrid.new(config.world_size, config.cell_size, config.use_sparse_spatial())
+	ai.grid = grid
+	resources.configure(config)
+	motion.setup(store, grid, intents, config)
+	interaction.setup(store, resources, intents, config)
+	tuning.sync_generation(config)
 	_random.seed = scenario.random_seed
 	resources.reset(scenario.random_seed)
 	tick = 0
@@ -77,6 +89,8 @@ func reset(initial: ScenarioConfig) -> void:
 	observer_reset.emit(store.epoch)
 	record_observer_event("reset", {
 		"counts": [scenario.sheep_count, scenario.wolf_count, scenario.dog_count],
+		"world_size": [config.world_size.x, config.world_size.y],
+		"resource_cell_size": config.resource_cell_size,
 		"parameters": tuning.snapshot(),
 	})
 
@@ -204,8 +218,13 @@ func _apply_commands() -> void:
 func _apply_observer_commands() -> bool:
 	var changed: bool = has_pending_observer_commands()
 	for change: TuningCatalog.Change in _pending_tuning:
+		var previous_capacity: float = config.sheep_stomach_capacity
 		var entry: TuningCatalog.LogEntry = tuning.apply(change, tick, store.epoch)
 		if entry != null:
+			if change.key == TuningCatalog.Param.GRASS_RECOVERY:
+				resources.set_recovery_rate(config.grass_recovery_rate, tick, config.fixed_dt)
+			elif change.key == TuningCatalog.Param.STOMACH_CAPACITY:
+				_resize_stomachs(previous_capacity)
 			record_observer_event("parameter", {"key": TuningCatalog.Param.keys()[entry.key], "previous": entry.previous, "value": entry.value})
 	if not _pending_tuning.is_empty():
 		# Radii and policy distances feed cached facts; rebuild them once.
@@ -309,3 +328,15 @@ func held_counts() -> PackedInt32Array:
 		if store.alive[dense] != 0 and store.held[dense] != 0:
 			result[store.species[dense]] += 1
 	return result
+
+## Capacity changes preserve actual stored food, not the old fullness ratio.
+func _resize_stomachs(previous_capacity: float) -> void:
+	var discarded_food: float = 0.0
+	for dense: int in store.count:
+		if store.alive[dense] == 0 or store.species[dense] != SimTypes.Species.SHEEP:
+			continue
+		var food: float = (1.0 - store.hunger[dense]) * previous_capacity
+		var retained: float = minf(food, config.sheep_stomach_capacity)
+		discarded_food += food - retained
+		store.hunger[dense] = clampf(1.0 - retained / config.sheep_stomach_capacity, 0.0, 1.0)
+	record_observer_event("stomach_capacity", {"previous": previous_capacity, "value": config.sheep_stomach_capacity, "discarded_food": discarded_food})

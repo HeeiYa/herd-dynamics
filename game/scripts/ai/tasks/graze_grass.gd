@@ -17,7 +17,11 @@ func _enter() -> void:
 
 func _tick(_delta: float) -> Status:
 	var ai: AICoordinator = context.coordinator
-	if selected_cell < 0 or ai.resources.get_effective_amount(selected_cell, context.current_tick) < ResourceGrid.MIN_GRAZABLE_AMOUNT:
+	if selected_cell >= 0 and ai.resources.get_effective_amount(selected_cell, context.current_tick) < ResourceGrid.MIN_GRAZABLE_AMOUNT:
+		_blocked_cell = selected_cell
+		_blocked_until_tick = context.current_tick + ai.settings.graze_retry_ticks
+		selected_cell = -1
+	if selected_cell < 0:
 		_select_cell()
 	if selected_cell < 0:
 		return FAILURE
@@ -36,12 +40,12 @@ func _select_cell() -> void:
 	var ai: AICoordinator = context.coordinator
 	var excluded: int = _blocked_cell if context.current_tick < _blocked_until_tick else -1
 	var current_cell: int = ai.resources.cell_at(context.position())
-	if current_cell != excluded and ai.resources.get_effective_amount(current_cell, context.current_tick) >= ResourceGrid.MIN_GRAZABLE_AMOUNT:
+	if current_cell != excluded and ai.resources.get_effective_amount(current_cell, context.current_tick) >= ResourceGrid.REENTER_COVERAGE:
 		# Food already underfoot is reachable. Prefer it to a slightly richer
 		# neighboring cell whose approach crosses the same crowded feeding group.
 		selected_cell = current_cell
 	else:
-		selected_cell = ai.resources.best_cell(context.position(), ai.config.perception_radius, context.current_tick, excluded)
+		selected_cell = ai.resources.best_neighbor(context.position(), ai.config.forage_cell_radius, context.current_tick, context.handle, excluded)
 	if selected_cell < 0:
 		return
 	var dense: int = ai.store.resolve(context.handle)

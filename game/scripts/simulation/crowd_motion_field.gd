@@ -15,6 +15,7 @@ var aggregate_agent_contributions: int = 0
 var columns: int
 var rows: int
 var cell_size: float
+var cell_map: SpatialCellMap
 
 var _store: AgentStore
 var _counts: PackedInt32Array = PackedInt32Array()
@@ -36,26 +37,33 @@ var _query_max: Vector2i
 var _prepared_dense: int = -1
 var _prepared_radius: float = 0.0
 
-func _init(world_size: Vector2, width: float) -> void:
+func _init(world_size: Vector2, width: float, use_sparse: bool = false) -> void:
 	assert(width > 0.0 and world_size.x > 0.0 and world_size.y > 0.0)
 	cell_size = width
 	columns = ceili(world_size.x / width)
 	rows = ceili(world_size.y / width)
-	var cell_count: int = columns * rows
-	_counts.resize(cell_count)
+	cell_map = SpatialCellMap.new(columns, rows, use_sparse)
 	_prefix_stride = columns + 1
-	_prefix_counts.resize(_prefix_stride * (rows + 1))
-	_prefix_counts.fill(0)
-	_position_sums.resize(cell_count)
-	_radius_sums.resize(cell_count)
-	_sheep_counts.resize(cell_count)
-	_sheep_position_sums.resize(cell_count)
-	_sheep_velocity_sums.resize(cell_count)
-	_heads.resize(cell_count)
+	if not use_sparse:
+		_prefix_counts.resize(_prefix_stride * (rows + 1))
+		_prefix_counts.fill(0)
+	_resize_columns(cell_map.storage_count)
+
+func _resize_columns(count: int) -> void:
+	_counts.resize(count)
+	_position_sums.resize(count)
+	_radius_sums.resize(count)
+	_sheep_counts.resize(count)
+	_sheep_position_sums.resize(count)
+	_sheep_velocity_sums.resize(count)
+	_heads.resize(count)
 
 func rebuild(store: AgentStore, use_prefix_counts: bool = true) -> void:
 	_store = store
-	_use_prefix_counts = use_prefix_counts
+	cell_map.rebuild(store, cell_size)
+	if cell_map.sparse:
+		_resize_columns(cell_map.storage_count)
+	_use_prefix_counts = use_prefix_counts and not cell_map.sparse
 	_expire_dead_lives()
 	_counts.fill(0)
 	_position_sums.fill(Vector2.ZERO)
@@ -135,7 +143,9 @@ func _count_candidates() -> int:
 	for y: int in range(_query_min.y, _query_max.y + 1):
 		for x: int in range(_query_min.x, _query_max.x + 1):
 			cell_visits += 1
-			count += _counts[y * columns + x]
+			var cell: int = cell_map.slot(x, y) if cell_map.sparse else y * columns + x
+			if cell >= 0:
+				count += _counts[cell]
 	return count
 
 func query_exact(dense: int, search_radius: float, output: Array[int]) -> void:
@@ -149,7 +159,8 @@ func query_exact(dense: int, search_radius: float, output: Array[int]) -> void:
 	for y: int in range(_query_min.y, _query_max.y + 1):
 		for x: int in range(_query_min.x, _query_max.x + 1):
 			cell_visits += 1
-			var neighbor: int = _heads[y * columns + x]
+			var cell: int = cell_map.slot(x, y) if cell_map.sparse else y * columns + x
+			var neighbor: int = _heads[cell] if cell >= 0 else -1
 			while neighbor >= 0:
 				exact_candidate_visits += 1
 				if position.distance_squared_to(_store.position_current[neighbor]) <= radius_squared:
@@ -173,7 +184,9 @@ func sample_steering(dense: int, intent_mode: int, config: SimulationConfig) -> 
 	for y: int in range(_query_min.y, _query_max.y + 1):
 		for x: int in range(_query_min.x, _query_max.x + 1):
 			cell_visits += 1
-			var cell: int = y * columns + x
+			var cell: int = cell_map.slot(x, y) if cell_map.sparse else y * columns + x
+			if cell < 0:
+				continue
 			var neighbor_count: int = _counts[cell]
 			if neighbor_count == 0:
 				continue
@@ -238,7 +251,7 @@ func _prepare_query(position: Vector2, search_radius: float) -> void:
 func _cell_at(position: Vector2) -> int:
 	var x: int = clampi(floori(position.x / cell_size), 0, columns - 1)
 	var y: int = clampi(floori(position.y / cell_size), 0, rows - 1)
-	return y * columns + x
+	return cell_map.slot(x, y) if cell_map.sparse else y * columns + x
 
 func _expire_dead_lives() -> void:
 	if _indexed_epoch != _store.epoch:

@@ -211,3 +211,9 @@ func _set_mode(next: Mode) -> void:
 		return
 	mode = next
 	mode_changed.emit(mode)
+
+## A new world invalidates the prior bounds, follow handle and camera transition.
+func set_world_size(size: Vector2) -> void:
+	stop_follow()
+	_world_size = size
+	show_overview(true)

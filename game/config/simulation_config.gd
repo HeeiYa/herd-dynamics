@@ -1,5 +1,7 @@
 class_name SimulationConfig
 extends Resource
+enum SpatialBackend { AUTO, DENSE, SPARSE }
+@export var spatial_backend: SpatialBackend = SpatialBackend.AUTO
 ## Durations ending in _ticks use the single fixed simulation clock.
 @export var instrument_enabled: bool = false
 @export var incremental_render_sort: bool = true
@@ -48,3 +50,16 @@ extends Resource
 
 @export var agent_radius: float = 13.0
 @export var resource_cell_size: float = 80.0
+# Food units: one fully grown standard 80 x 80 patch stores grass_capacity.
+@export var initial_grass_coverage: float = 0.675
+@export var grass_capacity: float = 1.0
+@export var sheep_metabolism: float = 0.015
+@export var sheep_stomach_capacity: float = 1.0
+@export var forage_cell_radius: int = 1
+
+## ECO-001: occupied blocks reduce storage, but measured slower up to 6400x4000.
+## AUTO retains dense arrays; sparse remains an explicit memory/performance experiment.
+func use_sparse_spatial() -> bool:
+	if spatial_backend != SpatialBackend.AUTO:
+		return spatial_backend == SpatialBackend.SPARSE
+	return false

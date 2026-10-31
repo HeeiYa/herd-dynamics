@@ -34,19 +34,27 @@ var _flock_sums: PackedVector2Array = PackedVector2Array()
 var _flock_min: PackedVector2Array = PackedVector2Array()
 var _flock_max: PackedVector2Array = PackedVector2Array()
 var _indexed_life_revision: int = -1
+var cell_map: SpatialCellMap
 
-func _init(world_size: Vector2 = Vector2(1600, 1000), width: float = 80.0) -> void:
+func _init(world_size: Vector2 = Vector2(1600, 1000), width: float = 80.0, use_sparse: bool = false) -> void:
 	cell_size = width
 	columns = ceili(world_size.x / width)
 	rows = ceili(world_size.y / width)
-	_heads.resize(columns * rows * 3)
-	_occupancy.resize(columns * rows)
-	_flock_counts.resize(columns * rows)
-	_flock_sums.resize(columns * rows)
-	_flock_min.resize(columns * rows)
-	_flock_max.resize(columns * rows)
+	cell_map = SpatialCellMap.new(columns, rows, use_sparse)
+	_resize_columns(cell_map.storage_count)
+
+func _resize_columns(count: int) -> void:
+	_heads.resize(count * 3)
+	_occupancy.resize(count)
+	_flock_counts.resize(count)
+	_flock_sums.resize(count)
+	_flock_min.resize(count)
+	_flock_max.resize(count)
 
 func rebuild(store: AgentStore) -> void:
+	cell_map.rebuild(store, cell_size)
+	if cell_map.sparse:
+		_resize_columns(cell_map.storage_count)
 	_candidate_batches.clear()
 	shared_hits = 0
 	shared_builds = 0
@@ -69,7 +77,7 @@ func rebuild(store: AgentStore) -> void:
 		var position: Vector2 = store.position_current[dense]
 		var x: int = clampi(floori(position.x / cell_size), 0, columns - 1)
 		var y: int = clampi(floori(position.y / cell_size), 0, rows - 1)
-		var cell: int = y * columns + x
+		var cell: int = cell_map.slot(x, y) if cell_map.sparse else y * columns + x
 		var head: int = cell * 3 + store.species[dense]
 		_next[dense] = _heads[head]
 		_heads[head] = dense
@@ -153,7 +161,9 @@ func query_protection_flock(center: Vector2, search_radius: float, previous_anch
 func _sample_flock_cell(cell: int, center: Vector2, radius_squared: float, store: AgentStore, output: FlockSample) -> void:
 	output.count = 0
 	output.position_sum = Vector2.ZERO
-	if _flock_counts[cell] == 0:
+	if cell_map.sparse:
+		cell = cell_map.slot(cell % columns, cell / columns)
+	if cell < 0 or _flock_counts[cell] == 0:
 		return
 	var far_x: float = maxf(absf(_flock_min[cell].x - center.x), absf(_flock_max[cell].x - center.x))
 	var far_y: float = maxf(absf(_flock_min[cell].y - center.y), absf(_flock_max[cell].y - center.y))
@@ -184,8 +194,11 @@ func query(center: Vector2, search_radius: float, species_filter: int, store: Ag
 	var radius_squared: float = search_radius * search_radius
 	for y: int in range(min_y, max_y + 1):
 		for x: int in range(min_x, max_x + 1):
+			var cell: int = cell_map.slot(x, y) if cell_map.sparse else y * columns + x
+			if cell < 0:
+				continue
 			for kind: int in range(first_species, last_species + 1):
-				var dense: int = _heads[(y * columns + x) * 3 + kind]
+				var dense: int = _heads[cell * 3 + kind]
 				while dense >= 0:
 					candidate_count += 1
 					if store.alive[dense] != 0 and center.distance_squared_to(store.position_current[dense]) <= radius_squared:
@@ -209,7 +222,9 @@ func query_flock(center: Vector2, search_radius: float, store: AgentStore, outpu
 	var position_sum := Vector2.ZERO
 	for y: int in range(min_y, max_y + 1):
 		for x: int in range(min_x, max_x + 1):
-			var cell: int = y * columns + x
+			var cell: int = cell_map.slot(x, y) if cell_map.sparse else y * columns + x
+			if cell < 0:
+				continue
 			if _flock_counts[cell] == 0:
 				continue
 			# Use actual member bounds: clamped edge cells may contain positions
@@ -248,7 +263,10 @@ func query_peers(center: Vector2, search_radius: float, species_filter: int, sto
 	var radius_squared: float = search_radius * search_radius
 	for y: int in range(min_y, max_y + 1):
 		for x: int in range(min_x, max_x + 1):
-			var dense: int = _heads[(y * columns + x) * 3 + species_filter]
+			var cell: int = cell_map.slot(x, y) if cell_map.sparse else y * columns + x
+			if cell < 0:
+				continue
+			var dense: int = _heads[cell * 3 + species_filter]
 			while dense >= 0:
 				candidate_count += 1
 				if dense != excluded_dense and store.alive[dense] != 0 and center.distance_squared_to(store.position_current[dense]) <= radius_squared:

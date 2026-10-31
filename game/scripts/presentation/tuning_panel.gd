@@ -1,5 +1,7 @@
 class_name TuningPanel
 extends VBoxContainer
+signal regeneration_requested
+signal generation_draft_changed
 signal range_preview_changed(key: TuningCatalog.Param, radius: float, active: bool)
 ## Parameter editor. Dragging only previews; release (or a click/keyboard
 ## change) submits one TuningCatalog.Change to the world, which applies it at
@@ -29,6 +31,7 @@ func setup(catalog: TuningCatalog, submit_change: Callable) -> void:
 	for parameter: TuningCatalog.Parameter in _catalog.parameters:
 		_add_row(parameter)
 	$Footer/Restore.pressed.connect(_restore_all)
+	$Footer/ApplyGeneration.pressed.connect(func() -> void: regeneration_requested.emit())
 	refresh(false)
 
 func _add_row(parameter: TuningCatalog.Parameter) -> void:
@@ -89,6 +92,13 @@ func _submit(row: Row, value: float) -> void:
 		_sync_slider(row, value)
 		range_preview_changed.emit(row.key, value, row.pending)
 		return
+	if parameter.requires_reset:
+		row.pending = not is_equal_approx(value, parameter.value)
+		row.pending_value = value
+		_sync_slider(row, value)
+		generation_draft_changed.emit()
+		refresh(false)
+		return
 	if not _submit_change.call(TuningCatalog.Change.new(row.key, value)):
 		return
 	row.pending = true
@@ -103,6 +113,8 @@ func _restore_all() -> void:
 
 func _clear_pending() -> void:
 	for row: Row in _rows:
+		if _catalog.get_parameter(row.key).requires_reset:
+			continue
 		row.pending = false
 		if row.dragging:
 			# Another command may apply while this row is still only a draft.
@@ -135,12 +147,38 @@ func _show_value(row: Row, value: float, previewing: bool) -> void:
 
 func refresh(paused: bool) -> void:
 	var pending: int = 0
+	var generation_pending: int = 0
 	for row: Row in _rows:
 		if row.pending:
-			pending += 1
+			if _catalog.get_parameter(row.key).requires_reset:
+				generation_pending += 1
+			else:
+				pending += 1
 		elif not row.dragging:
 			_sync_slider(row, _catalog.get_parameter(row.key).value)
 	var text: String = "本次运行已修改 %d 次" % _catalog.applied_count
 	if pending > 0:
 		text = "%d 项待生效（%s）· %s" % [pending, "暂停中，单步或继续后应用" if paused else "下一模拟步应用", text]
+	if generation_pending > 0:
+		text = "%d 项场地草稿，重新生成后应用\n%s" % [generation_pending, text]
 	_status.text = text
+
+func generation_draft() -> PastureSettings:
+	var draft := PastureSettings.new()
+	draft.world_size = Vector2(_generation_value(TuningCatalog.Param.WORLD_WIDTH), _generation_value(TuningCatalog.Param.WORLD_HEIGHT))
+	draft.grass_cell_size = _generation_value(TuningCatalog.Param.GRASS_CELL_SIZE)
+	draft.initial_coverage = _generation_value(TuningCatalog.Param.INITIAL_GRASS)
+	draft.food_per_standard_area = _generation_value(TuningCatalog.Param.GRASS_CAPACITY)
+	return draft.validated_copy()
+
+func _generation_value(key: TuningCatalog.Param) -> float:
+	var row: Row = _rows[key]
+	return row.pending_value if row.pending else _catalog.get_parameter(key).value
+
+func apply_generation_draft(draft: PastureSettings) -> void:
+	assert(draft != null and draft.validated_copy() != null)
+	_submit(_rows[TuningCatalog.Param.WORLD_WIDTH], draft.world_size.x)
+	_submit(_rows[TuningCatalog.Param.WORLD_HEIGHT], draft.world_size.y)
+	_submit(_rows[TuningCatalog.Param.GRASS_CELL_SIZE], draft.grass_cell_size)
+	_submit(_rows[TuningCatalog.Param.INITIAL_GRASS], draft.initial_coverage)
+	_submit(_rows[TuningCatalog.Param.GRASS_CAPACITY], draft.food_per_standard_area)

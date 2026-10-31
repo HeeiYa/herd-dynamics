@@ -24,8 +24,12 @@ func setup(simulation: SimulationWorld, view: WorldPresentation) -> void:
 	presentation = view
 	_last_usec = Time.get_ticks_usec()
 
-func request_reset(scenario: ScenarioConfig) -> void:
-	_pending_reset = scenario.duplicate() as ScenarioConfig
+func request_reset(scenario: ScenarioConfig) -> bool:
+	var owned: ScenarioConfig = scenario.validated_copy() if scenario != null else null
+	if owned == null:
+		return false
+	_pending_reset = owned
+	return true
 
 func request_pause(value: bool) -> void:
 	_pending_pause = int(value)
@@ -66,6 +70,7 @@ func _process(_delta: float) -> void:
 		elapsed = 0.0
 	if _pending_reset != null:
 		world.reset(_pending_reset)
+		presentation.bind_world(world)
 		presentation.set_seed(world.scenario.random_seed)
 		_pending_reset = null
 		accumulator_seconds = 0.0
