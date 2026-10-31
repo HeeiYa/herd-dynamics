@@ -127,17 +127,19 @@ func _run_rendered() -> void:
 	await get_tree().process_frame
 	# An unattended benchmark must not consume the user's desktop key presses
 	# or GUI clicks as pause/reset/tuning commands during the measurement.
-	main.set_process_input(false)
-	main.set_process_unhandled_input(false)
+	main.observer.set_process_input(false)
+	main.observer.set_process_unhandled_input(false)
 	get_tree().root.gui_disable_input = true
-	main._seed.value = int(_options.get("seed", "42"))
-	main._sheep.value = int(_options.get("sheep", str(main._world.scenario.sheep_count)))
-	main._wolves.value = int(_options.get("wolves", str(main._world.scenario.wolf_count)))
-	main._dogs.value = int(_options.get("dogs", str(main._world.scenario.dog_count)))
-	main._layout.select(int(_options.get("layout", "0")))
-	main._reset_scenario()
-	main._zoom = float(_options.get("view-scale", str(main._zoom)))
-	main._fit_camera()
+	var initial := ScenarioConfig.new()
+	initial.random_seed = int(_options.get("seed", "42"))
+	initial.sheep_count = int(_options.get("sheep", str(main._world.scenario.sheep_count)))
+	initial.wolf_count = int(_options.get("wolves", str(main._world.scenario.wolf_count)))
+	initial.dog_count = int(_options.get("dogs", str(main._world.scenario.dog_count)))
+	initial.layout = int(_options.get("layout", "0")) as ScenarioConfig.Layout
+	main.observer.apply_scenario(initial)
+	main.observer.reset_scenario()
+	main.observer._zoom = float(_options.get("view-scale", str(main.observer._zoom)))
+	main.observer.fit_camera()
 	var world: SimulationWorld = main._world
 	world.config.ai_budget_usec = int(_options.get("ai-budget-usec", str(world.config.ai_budget_usec)))
 	world.config.compact_flock_knowledge = _options.get("compact-flock", "1") == "1"
@@ -233,7 +235,7 @@ func _run_rendered() -> void:
 		"os": OS.get_name(), "os_version": OS.get_version(),
 		"resolution": [get_tree().root.size.x, get_tree().root.size.y], "camera_zoom": main._camera.zoom.x,
 		"display_refresh_hz": DisplayServer.screen_get_refresh_rate(DisplayServer.window_get_current_screen()),
-		"observer_view": observer_view, "observer_panel_open": main._panel_open,
+		"observer_view": observer_view, "observer_panel_open": main.hud.panel_open,
 		"paused_at_end": runner.paused, "time_scale": runner.speed,
 		"gpu_measurement_enabled": measure_gpu,
 		"gpu_measurement_scope": "Main viewport render timestamp, may lag the sampled frame; excludes scripts and static decoration bake. Zero is unavailable, not zero GPU cost.",
@@ -307,14 +309,14 @@ func _configure_observer_view(main: Node2D, mode: String) -> bool:
 	if selected == null and world.store.count > 0:
 		selected = world.store.handle_at(0)
 	# _select would open the panel and refit the overview, changing the workload.
-	main._selected = selected
+	main.observer._selected = selected
 	main._view.set_selected(selected)
 	if mode == "debug":
-		for key: StringName in main._overlay_buttons:
-			main._overlay_buttons[key].set_pressed_no_signal(true)
-		main._sync_overlays()
-		main._perf_details = true
-	main._refresh_panel()
+		for key: StringName in main.hud.overlay_buttons:
+			main.hud.overlay_buttons[key].set_pressed_no_signal(true)
+		main.observer.sync_overlays()
+		main.hud.stats.visible = true
+	main.observer.refresh_panel()
 	return true
 
 ## Post-window diagnostic. Includes missing/unserved agents rather than taking

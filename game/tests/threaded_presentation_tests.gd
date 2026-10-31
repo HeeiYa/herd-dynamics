@@ -61,17 +61,17 @@ func _run() -> void:
 		return
 	var origin: Vector2 = _access.store.position_current[_access.store.resolve(handle)]
 	var zoom_before: float = camera.zoom_level
-	_main._set_tool(_main.Tool.GRAB)
+	_main.observer.set_tool(_main.observer.Tool.GRAB)
 	_pointer(screen, true)
 	for frame: int in 5:
 		await process_frame
-	_check(_main._grab.is_busy() and not _main._panel_open, "First grab does not expand the panel underneath the pointer")
+	_check(_main._grab.is_busy() and not _main.hud.panel_open, "First grab does not expand the panel underneath the pointer")
 	_check(is_equal_approx(zoom_before, camera.zoom_level), "Stationary grab preserves overview scale")
 	_pointer(screen, false)
 	runner.request_single_step()
 	await _until(func() -> bool: return not _main._grab.is_busy(), "Drop receipt completes the grab")
 	_check(origin.distance_to(_access.store.position_current[_access.store.resolve(handle)]) < 2.0, "Stationary body click preserves the foot anchor (apart from one motion step)")
-	_main._select(handle)
+	_main.observer.select(handle)
 	await _until(func() -> bool: return _access.inspect(handle) != null, "Selected inspection is published without borrowing a BT instance")
 	camera.show_overview(false)
 	_check(camera.follow(handle), "Follow takes over the overview animation")
@@ -98,16 +98,16 @@ func _run() -> void:
 	_check(frames >= 3 and camera.focus.distance_to(prior_focus) > 0.5, "Camera continues moving during a CPU-busy worker stall")
 	await _until(func() -> bool: return not _access.has_pending_control(SimulationCommand.Kind.STALL), "Worker stall completes")
 	var old_epoch: int = _access.store.epoch
-	_main._reset_scenario()
+	_main.observer.reset_scenario()
 	await _until(func() -> bool: return _access.store.epoch > old_epoch, "Reset replaces the publication epoch")
-	_check(_main._selected == null and not _main._grab.is_busy(), "Reset clears frontend references to the old life")
+	_check(_main.observer._selected == null and not _main._grab.is_busy(), "Reset clears frontend references to the old life")
 	runner.request_pause(false)
 	await _until(func() -> bool: return _access.tick >= 60, "Reset scene resumes with populated publications")
-	_main._set_tool(_main.Tool.SELECT)
+	_main.observer.set_tool(_main.observer.Tool.SELECT)
 	_main._camera.show_overview(true)
-	if _main._panel_open:
-		_main._toggle_panel()
-	_main._refresh_panel()
+	if _main.hud.panel_open:
+		_main.hud.toggle_panel()
+	_main.observer.refresh_panel()
 	await process_frame
 	await process_frame
 	await RenderingServer.frame_post_draw

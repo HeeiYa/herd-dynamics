@@ -1,0 +1,90 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/presentation/agent_inspector.gd" id="script"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_j65iw"]
+bg_color = Color(0.9098039, 0.8627451, 0.7647059, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_gk2dd"]
+bg_color = Color(0.76862746, 0.4392157, 0.22745098, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[node name="Inspector" type="VBoxContainer"]
+script = ExtResource("script")
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="Empty" type="Label" parent="."]
+modulate = Color(0.47843137, 0.41568628, 0.33333334, 1)
+layout_mode = 2
+text = "点击牧场中的角色查看它在做什么、为什么这样做。
+
+快捷键：F 跟随 · Home 总览 · Esc 取消"
+autowrap_mode = 3
+
+[node name="Title" type="Label" parent="."]
+visible = false
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+
+[node name="Summary" type="RichTextLabel" parent="."]
+visible = false
+layout_mode = 2
+theme_override_colors/default_color = Color(0.23137255, 0.19215687, 0.15294118, 1)
+bbcode_enabled = true
+fit_content = true
+scroll_active = false
+
+[node name="HungerRow" type="HBoxContainer" parent="."]
+visible = false
+layout_mode = 2
+
+[node name="Label76" type="Label" parent="HungerRow"]
+layout_mode = 2
+text = "饥饿"
+
+[node name="Hunger" type="ProgressBar" parent="HungerRow"]
+custom_minimum_size = Vector2(0, 12)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+theme_override_styles/background = SubResource("StyleBoxFlat_j65iw")
+theme_override_styles/fill = SubResource("StyleBoxFlat_gk2dd")
+max_value = 1.0
+show_percentage = false
+
+[node name="Actions" type="HBoxContainer" parent="."]
+visible = false
+layout_mode = 2
+
+[node name="Follow" type="Button" parent="Actions"]
+layout_mode = 2
+focus_mode = 0
+text = "跟随 (F)"
+
+[node name="Remove" type="Button" parent="Actions"]
+layout_mode = 2
+focus_mode = 0
+text = "移除角色"
+
+[node name="DetailsToggle" type="Button" parent="."]
+visible = false
+layout_mode = 2
+focus_mode = 0
+toggle_mode = true
+text = "详细调试 ▸"
+
+[node name="Details" type="Label" parent="."]
+visible = false
+modulate = Color(0.47843137, 0.41568628, 0.33333334, 1)
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+autowrap_mode = 3

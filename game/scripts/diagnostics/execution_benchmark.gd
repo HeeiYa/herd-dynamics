@@ -55,8 +55,8 @@ func _run() -> void:
 	get_tree().current_scene = _main
 	await get_tree().process_frame
 	await get_tree().process_frame
-	_main.set_process_input(false)
-	_main.set_process_unhandled_input(false)
+	_main.observer.set_process_input(false)
+	_main.observer.set_process_unhandled_input(false)
 	get_tree().root.gui_disable_input = true
 	_access = _main._access
 	var output: String = _options.get("output", "user://execution-benchmark")
@@ -229,14 +229,14 @@ func _on_inline_step(elapsed_usec: int) -> void:
 	_steps.append(PackedStringArray([str(world.tick), str(elapsed_usec), "0", str(world.ai.frame_used_usec), str(active), str(missing), str(world.ai.max_perception_delay_ticks), str(world.ai.max_decision_delay_ticks), str(world.phase_usec[4]), str(world.store.epoch), str(world.phase_usec[0]), str(world.phase_usec[1]), str(world.phase_usec[2]), str(world.phase_usec[5])]))
 
 func _regenerate(sheep_count: int) -> void:
-	_regeneration_count = sheep_count + int(_main._wolves.value) + int(_main._dogs.value)
+	_regeneration_count = sheep_count + int(_main.hud.wolves.value) + int(_main.hud.dogs.value)
 	_regeneration_epoch = _access.store.epoch + 1
 	_regeneration_usec = Time.get_ticks_usec()
-	_main._sheep.value = sheep_count
+	_main.hud.sheep.value = sheep_count
 	var started: int = Time.get_ticks_usec()
 	# Same callback as the scene panel's generation button; the timer covers
 	# submission, while epoch-labelled frames cover planning and staged births.
-	_main._reset_scenario()
+	_main.observer.reset_scenario()
 	_actions.append(PackedStringArray([str(started - _started_usec), str(Time.get_ticks_usec() - started), "generate", str(_access.store.epoch), str(_access.tick)]))
 
 func _track_generation(now: int) -> void:
@@ -256,23 +256,23 @@ func _observer_action(index: int, mode: String) -> void:
 	else:
 		match index % 4:
 			0:
-				_main._toggle_panel()
+				_main.hud.toggle_panel()
 				action = "panel_toggle"
 			1:
-				_main._tabs.current_tab = 1
+				_main.hud.tabs.current_tab = 1
 				action = "parameter_tab"
 			2:
 				if _access.store.count > 0:
-					_main._select(_access.store.handle_at(0))
+					_main.observer.select(_access.store.handle_at(0))
 				_main._camera.pan_screen(Vector2(8, 0))
 				action = "select_and_pan"
 			3:
 				# Change only the gesture draft: no altered AI radius/load in an
 				# otherwise comparable UI responsiveness measurement.
-				var row: TuningPanel.Row = _main._tuning._rows[0]
-				_main._tuning._begin_drag(row)
-				_main._tuning._on_value(row, row.slider.value)
-				_main._tuning._end_drag(row, false)
+				var row: TuningPanel.Row = _main.hud.tuning._rows[0]
+				_main.hud.tuning._begin_drag(row)
+				_main.hud.tuning._on_value(row, row.slider.value)
+				_main.hud.tuning._end_drag(row, false)
 				action = "slider_preview"
 	_actions.append(PackedStringArray([str(started - _started_usec), str(Time.get_ticks_usec() - started), action, str(_access.store.epoch), str(_access.tick)]))
 
