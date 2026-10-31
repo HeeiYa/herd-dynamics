@@ -337,7 +337,7 @@ func _test_insight_marks_and_knowledge() -> void:
 	view.setup(world.store, world.intents, world.resources, world.config)
 	var overlay := InsightOverlay.new()
 	root.add_child(overlay)
-	overlay.setup(world, view)
+	overlay.setup(SimulationAccess.local(world), view)
 	overlay.camera_zoom = 2.0
 	await process_frame
 	var sheep: AgentHandle = world.create_at(SimTypes.Species.SHEEP, Vector2(500, 500))

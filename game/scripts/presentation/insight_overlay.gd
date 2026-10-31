@@ -35,7 +35,7 @@ var show_marks: bool = true
 var hovered: AgentHandle
 var camera_zoom: float = 1.0
 
-var _world: SimulationWorld
+var _world: SimulationAccess
 var _view: WorldPresentation
 var _font: Font
 var _marks: Array[Mark] = []
@@ -52,7 +52,7 @@ func set_range_preview(key: TuningCatalog.Param, radius: float, active: bool) ->
 		preview_parameter = -1
 	queue_redraw()
 
-func setup(world: SimulationWorld, view: WorldPresentation) -> void:
+func setup(world: SimulationAccess, view: WorldPresentation) -> void:
 	_world = world
 	_view = view
 	_font = UiStyle.interface_theme().default_font
@@ -155,14 +155,14 @@ func _draw() -> void:
 	_draw_marks(pixel)
 
 func _draw_selected(handle: AgentHandle, foot: Vector2, pixel: float) -> void:
-	var context: AgentContext = _world.ai.inspect(handle)
+	var context: AgentInspection = _world.inspect(handle)
 	var dense: int = _world.store.resolve(handle)
 	_draw_range_preview(context, dense, foot, pixel)
 	if show_perception:
 		_dashed_circle(foot, _world.config.perception_radius, UiStyle.PERCEPTION, 1.5 * pixel, 10.0 * pixel)
 	if show_protection and context != null and _world.store.species[dense] == SimTypes.Species.DOG and context.flock_count > 0:
-		draw_circle(context.protection_anchor, _world.ai.settings.protection_radius, Color(UiStyle.PROTECTION, 0.12), true, -1.0, true)
-		_dashed_circle(context.protection_anchor, _world.ai.settings.protection_radius, UiStyle.PROTECTION, 2.0 * pixel, 14.0 * pixel)
+		draw_circle(context.protection_anchor, _world.settings.protection_radius, Color(UiStyle.PROTECTION, 0.12), true, -1.0, true)
+		_dashed_circle(context.protection_anchor, _world.settings.protection_radius, UiStyle.PROTECTION, 2.0 * pixel, 14.0 * pixel)
 		_dashed_circle(context.protection_anchor, _world.config.dog_leash_radius, Color(UiStyle.PROTECTION, 0.35), 1.0 * pixel, 6.0 * pixel)
 		_diamond(context.protection_anchor, 6.0 * pixel, UiStyle.PROTECTION)
 	var intent: MotionIntent = _world.intents.get_intent(handle, _world.tick)
@@ -174,7 +174,7 @@ func _draw_selected(handle: AgentHandle, foot: Vector2, pixel: float) -> void:
 	if show_target and intent.target != null and context != null:
 		_draw_known_target(context, intent.target, foot, pixel)
 
-func _draw_range_preview(context: AgentContext, dense: int, foot: Vector2, pixel: float) -> void:
+func _draw_range_preview(context: AgentInspection, dense: int, foot: Vector2, pixel: float) -> void:
 	if preview_parameter < 0:
 		return
 	var center: Vector2 = foot
@@ -187,7 +187,7 @@ func _draw_range_preview(context: AgentContext, dense: int, foot: Vector2, pixel
 
 ## The line ends at the remembered sighting. An expired or invalid memory
 ## draws no line, so the overlay cannot leak where the target went.
-func _draw_known_target(context: AgentContext, target: AgentHandle, foot: Vector2, pixel: float) -> void:
+func _draw_known_target(context: AgentInspection, target: AgentHandle, foot: Vector2, pixel: float) -> void:
 	var sighting: LocalObservation = context.observation_for(target, _world.tick)
 	if sighting == null:
 		_label(foot + Vector2(0, -42) * pixel, "目标信息已失效", UiStyle.INVALID_DROP, pixel)

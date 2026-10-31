@@ -6,6 +6,7 @@ var coordinator: AICoordinator
 var handle: AgentHandle
 var species: int = SimTypes.Species.SHEEP
 var player: BTPlayer
+var detached_tree: BTInstance
 var observations: Dictionary[int, LocalObservation] = {}
 # PerceptionSystem alone maintains these derived observation caches. For the
 # individual-memory policy, the sheep sum excludes this observer.
@@ -60,6 +61,7 @@ var decision_ticket: int = 0
 # An observer intervention holds this life outside the pasture. While set, the
 # tree is inactive and no perception or decision job is scheduled.
 var suspended: bool = false
+var awaiting_resume_perception: bool = false
 var current_tick: int = 0
 var last_decision_tick: int = 0
 var last_perception_tick: int = -1
@@ -74,6 +76,24 @@ var exploration_sequence: int = 0
 var exploration_progress_position: Vector2 = Vector2.ZERO
 var exploration_progress_tick: int = 0
 var _next_token: int = 1
+
+func tree_instance() -> BTInstance:
+	return detached_tree if detached_tree != null else player.get_bt_instance()
+
+func activate_tree(active: bool) -> void:
+	if player != null:
+		player.active = active
+
+func abort_tree() -> void:
+	var instance: BTInstance = tree_instance()
+	if instance != null:
+		instance.get_root_task().abort()
+
+func update_tree(elapsed: float) -> void:
+	if detached_tree != null:
+		detached_tree.update(elapsed)
+	else:
+		player.update(elapsed)
 
 func position() -> Vector2:
 	var dense: int = coordinator.store.resolve(handle)
@@ -108,10 +128,10 @@ func is_alert() -> bool:
 	return prey != null and observation_for(prey.handle) != null
 
 func clear_runtime() -> void:
-	if player != null:
-		player.active = false
-		if player.get_bt_instance() != null:
-			player.get_bt_instance().get_root_task().abort()
+	awaiting_resume_perception = false
+	activate_tree(false)
+	if player != null or detached_tree != null:
+		abort_tree()
 	observations.clear()
 	remembered_flock_sum = Vector2.ZERO
 	remembered_flock_count = 0

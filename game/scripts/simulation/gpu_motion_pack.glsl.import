@@ -1,0 +1,13 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://c1qy87c3kdvwe"
+path="res://.godot/imported/gpu_motion_pack.glsl-111714ed943421b85cc098a889db6329.res"
+
+[deps]
+
+source_file="res://scripts/simulation/gpu_motion_pack.glsl"
+dest_files=["res://.godot/imported/gpu_motion_pack.glsl-111714ed943421b85cc098a889db6329.res"]
+
+[params]

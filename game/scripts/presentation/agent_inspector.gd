@@ -1,8 +1,8 @@
 class_name AgentInspector
 extends VBoxContainer
 ## Read-only character card: a plain-language summary first, details on demand.
-## Reads intents, the AI context (via AICoordinator.inspect) and attack records;
-## it never writes simulation state.
+## Reads published intents, selected-life inspection and attack records;
+## it never borrows a live BT or writes simulation state.
 
 signal follow_requested
 signal remove_requested
@@ -85,7 +85,7 @@ func _show_empty(empty: bool) -> void:
 		node.visible = not empty
 	_details.visible = not empty and _details_toggle.button_pressed
 
-func refresh(world: SimulationWorld, handle: AgentHandle) -> void:
+func refresh(world: SimulationAccess, handle: AgentHandle) -> void:
 	var dense: int = world.store.resolve(handle)
 	if dense < 0:
 		_show_empty(true)
@@ -95,7 +95,7 @@ func refresh(world: SimulationWorld, handle: AgentHandle) -> void:
 	var dt: float = world.config.fixed_dt
 	var species: int = world.store.species[dense]
 	var held: bool = world.store.held[dense] != 0
-	var context: AgentContext = world.ai.inspect(handle)
+	var context: AgentInspection = world.inspect(handle)
 	var intent: MotionIntent = world.intents.get_intent(handle, tick)
 	_title.text = "%s · %s" % [BehaviorText.species(species), handle.key()]
 	_hunger.value = world.store.hunger[dense]
@@ -114,15 +114,15 @@ func refresh(world: SimulationWorld, handle: AgentHandle) -> void:
 	if context != null:
 		var perception_age: int = tick - context.last_perception_tick
 		var freshness: String = "尚未感知" if context.last_perception_tick < 0 else BehaviorText.age_text(perception_age, dt)
-		lines.append("[b]信息新鲜度[/b]  上次扫描 %s · 记忆 %d 条" % [freshness, context.observations.size()])
-	var attack: AttackRequest = world.interaction.get_attack(handle)
+		lines.append("[b]信息新鲜度[/b]  上次扫描 %s · 记忆 %d 条" % [freshness, context.observation_count])
+	var attack: AttackRequest = context.attack if context != null else null
 	if attack != null and species == SimTypes.Species.WOLF:
 		lines.append("[b]攻击[/b]  %s" % _attack_text(attack, tick, dt))
 	_summary.text = "\n".join(lines)
 	if _details.visible:
 		_details.text = _details_text(world, handle, context, intent, attack)
 
-func _destination_text(world: SimulationWorld, dense: int, intent: MotionIntent) -> String:
+func _destination_text(world: SimulationAccess, dense: int, intent: MotionIntent) -> String:
 	if intent.mode == SimTypes.IntentMode.STOP:
 		return "原地停留"
 	if intent.mode == SimTypes.IntentMode.GRAZE:
@@ -131,7 +131,7 @@ func _destination_text(world: SimulationWorld, dense: int, intent: MotionIntent)
 	return "约 %d px 外（黄色虚线）" % roundi(distance)
 
 ## Explains the AI's own knowledge of the target, never the live position.
-func _target_text(world: SimulationWorld, context: AgentContext, intent: MotionIntent) -> String:
+func _target_text(world: SimulationAccess, context: AgentInspection, intent: MotionIntent) -> String:
 	if intent.target == null:
 		return "无"
 	var store_dense: int = world.store.resolve(intent.target)
@@ -159,7 +159,7 @@ static func _attack_text(attack: AttackRequest, tick: int, dt: float) -> String:
 		status += " · 冷却 %.1f 秒" % ((attack.cooldown_until_tick - tick) * dt)
 	return status
 
-func _details_text(world: SimulationWorld, handle: AgentHandle, context: AgentContext, intent: MotionIntent, attack: AttackRequest) -> String:
+func _details_text(world: SimulationAccess, handle: AgentHandle, context: AgentInspection, intent: MotionIntent, attack: AttackRequest) -> String:
 	var tick: int = world.tick
 	var lines := PackedStringArray()
 	if intent != null:
@@ -167,7 +167,7 @@ func _details_text(world: SimulationWorld, handle: AgentHandle, context: AgentCo
 		lines.append("reason: %s" % intent.reason)
 	if context != null:
 		lines.append("任务 %s" % context.task_name)
-		var lease: CoordinationSystem.Lease = world.ai.coordination.get_lease(handle, tick)
+		var lease: CoordinationSystem.Lease = context.lease
 		if lease != null:
 			var role: String = BehaviorText.LEASE_ROLES[lease.role] if lease.kind == CoordinationSystem.Kind.HUNT else "防守"
 			lines.append("协作 %s · 目标 %s · 至 %d" % [role, lease.target.key(), lease.expires_tick])

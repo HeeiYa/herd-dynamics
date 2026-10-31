@@ -13,6 +13,7 @@ func _check(condition: bool, description: String) -> void:
 func _run() -> void:
 	var scene: PackedScene = load("res://scenes/main.tscn") as PackedScene
 	var main: Node2D = scene.instantiate() as Node2D
+	main.set_meta("inline_simulation", true)
 	root.add_child(main)
 	current_scene = main
 	for frame: int in range(120):

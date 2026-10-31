@@ -35,6 +35,54 @@ var _query_min: Vector2i
 var _query_max: Vector2i
 var _prepared_dense: int = -1
 var _prepared_radius: float = 0.0
+const GPU_CELL_FLOATS: int = 12
+enum GpuCellColumn {
+	POSITION_X, POSITION_Y, RADIUS_SUM, COUNT,
+	SHEEP_POSITION_X, SHEEP_POSITION_Y, SHEEP_VELOCITY_X, SHEEP_VELOCITY_Y,
+	HEAD, SHEEP_COUNT, PADDING_0, PADDING_1,
+}
+var _gpu_cells := PackedFloat32Array()
+
+## S(n) projection for the GPU motion phase. Three vec4s per cell, matching
+## Cell in gpu_motion.glsl: all-body sums, sheep sums, then head/sheep count.
+func gpu_cell_snapshot() -> PackedFloat32Array:
+	_gpu_cells.resize(columns * rows * GPU_CELL_FLOATS)
+	for cell: int in columns * rows:
+		var offset: int = cell * GPU_CELL_FLOATS
+		_gpu_cells[offset + GpuCellColumn.POSITION_X] = _position_sums[cell].x
+		_gpu_cells[offset + GpuCellColumn.POSITION_Y] = _position_sums[cell].y
+		_gpu_cells[offset + GpuCellColumn.RADIUS_SUM] = _radius_sums[cell]
+		_gpu_cells[offset + GpuCellColumn.COUNT] = _counts[cell]
+		_gpu_cells[offset + GpuCellColumn.SHEEP_POSITION_X] = _sheep_position_sums[cell].x
+		_gpu_cells[offset + GpuCellColumn.SHEEP_POSITION_Y] = _sheep_position_sums[cell].y
+		_gpu_cells[offset + GpuCellColumn.SHEEP_VELOCITY_X] = _sheep_velocity_sums[cell].x
+		_gpu_cells[offset + GpuCellColumn.SHEEP_VELOCITY_Y] = _sheep_velocity_sums[cell].y
+		_gpu_cells[offset + GpuCellColumn.HEAD] = _heads[cell]
+		_gpu_cells[offset + GpuCellColumn.SHEEP_COUNT] = _sheep_counts[cell]
+	return _gpu_cells
+
+func gpu_next_neighbor(dense: int) -> int:
+	return _next[dense]
+
+## Column offsets in gpu_motion_pack.glsl/pack_cell use 32-bit words:
+## position 0C, radius 2C, count 3C, sheep position 4C, sheep velocity 6C,
+## head 8C, sheep count 9C. Integer columns keep their native int32 bits.
+func gpu_cell_bytes_bulk() -> PackedByteArray:
+	var bytes: PackedByteArray = _position_sums.to_byte_array()
+	bytes.append_array(_radius_sums.to_byte_array())
+	bytes.append_array(_counts.to_byte_array())
+	bytes.append_array(_sheep_position_sums.to_byte_array())
+	bytes.append_array(_sheep_velocity_sums.to_byte_array())
+	bytes.append_array(_heads.to_byte_array())
+	bytes.append_array(_sheep_counts.to_byte_array())
+	return bytes
+
+func gpu_next_links_bytes() -> PackedByteArray:
+	return _next.to_byte_array()
+
+## Compute with the CPU's full lifetime integer precision, including wall policy.
+func gpu_overlap_direction(dense: int, world_size: Vector2) -> Vector2:
+	return _overlap_direction(_store.handle_at(dense), _store.position_current[dense], _store.radius[dense], world_size)
 
 func _init(world_size: Vector2, width: float) -> void:
 	assert(width > 0.0 and world_size.x > 0.0 and world_size.y > 0.0)
@@ -248,12 +296,15 @@ func _expire_dead_lives() -> void:
 			if not _store.is_alive(handle):
 				_dense_lives.erase(handle)
 
-func _overlap_direction(handle: AgentHandle, position: Vector2, body_radius: float, world_size: Vector2) -> Vector2:
+static func identity_direction(handle: AgentHandle) -> Vector2:
 	# The full life identity breaks coincidence without consuming a random stream.
 	# Irrational angular spacing avoids assigning all nearby slots the same axis.
 	var life_seed: int = handle.slot + handle.generation * 31 + handle.world_epoch * 131
 	var angle: float = fmod(float(life_seed) * GOLDEN_ANGLE_RADIANS, TAU)
-	var direction: Vector2 = Vector2.from_angle(angle)
+	return Vector2.from_angle(angle)
+
+func _overlap_direction(handle: AgentHandle, position: Vector2, body_radius: float, world_size: Vector2) -> Vector2:
+	var direction: Vector2 = identity_direction(handle)
 	# Start the soft wall response one body radius before hard contact. Restricting
 	# it to exact contact makes a centroid alternate between outward pressure and
 	# inward fallback every step, creating movement without meaningful progress.

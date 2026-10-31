@@ -151,6 +151,32 @@ func handle_at(dense: int) -> AgentHandle:
 	assert(dense >= 0 and dense < count)
 	return _handles[dense]
 
+## Own every mutable column. Only immutable life handles may be shared with a
+## reader on another thread. This projection is never returned to simulation.
+func publication_copy() -> AgentStore:
+	var copy := AgentStore.new()
+	copy.count = count
+	copy.capacity = capacity
+	copy.epoch = epoch
+	copy.life_revision = life_revision
+	copy.held_count = held_count
+	copy._next_slot = _next_slot
+	copy.position_current = position_current.duplicate()
+	copy.position_previous = position_previous.duplicate()
+	copy.velocity_current = velocity_current.duplicate()
+	copy.facing = facing.duplicate()
+	copy.radius = radius.duplicate()
+	copy.species = species.duplicate()
+	copy.alive = alive.duplicate()
+	copy.held = held.duplicate()
+	copy.hunger = hunger.duplicate()
+	copy.slot_to_dense = slot_to_dense.duplicate()
+	copy.dense_to_slot = dense_to_slot.duplicate()
+	copy.generations = generations.duplicate()
+	copy._handles = _handles.duplicate()
+	copy._live_handles = _live_handles.duplicate()
+	return copy
+
 func mark_dead(handle: AgentHandle) -> void:
 	var dense: int = resolve(handle)
 	if dense >= 0:

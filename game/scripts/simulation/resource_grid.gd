@@ -45,6 +45,15 @@ func cell_bounds(cell: int) -> Rect2:
 	var upper: Vector2 = (lower + Vector2.ONE * cell_size).min(_world_size)
 	return Rect2(lower, upper - lower)
 
+func publication_copy(config: SimulationConfig) -> ResourceGrid:
+	var copy := ResourceGrid.new(config)
+	copy._amount = _amount.duplicate()
+	copy._materialized_tick = _materialized_tick.duplicate()
+	copy._previous_amount = _previous_amount.duplicate()
+	copy._previous_tick = _previous_tick.duplicate()
+	copy._recovery_per_tick = _recovery_per_tick
+	return copy
+
 func cell_center(cell: int) -> Vector2:
 	return cell_bounds(cell).get_center()
 

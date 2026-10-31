@@ -116,6 +116,16 @@ func set_seed(random_seed: int) -> void:
 	if _ground != null:
 		_ground.set_decoration_seed(random_seed)
 
+## Adopt owned read-only data on the main thread; art and draw buffers stay local.
+func bind_publication(access: SimulationAccess) -> void:
+	_store = access.store
+	_intents = access.intents
+	_resources = access.resources
+	_config = access.config
+	_ground.bind_resources(_resources)
+	if _seed != access.scenario.random_seed:
+		set_seed(access.scenario.random_seed)
+
 func set_selected(handle: AgentHandle) -> void:
 	selected_handle = handle if _store != null and _store.is_alive(handle) else null
 
@@ -153,6 +163,7 @@ func observe_published(tick: int) -> void:
 		_clear_epoch()
 	if tick <= _observed_tick:
 		return
+	var started_usec: int = Time.get_ticks_usec() if probes.enabled else 0
 	_observed_tick = tick
 	if _states.size() < _store.capacity:
 		_states.resize(_store.capacity)
@@ -182,6 +193,8 @@ func observe_published(tick: int) -> void:
 			behavior_changed.emit(handle, _store.species[dense], previous_behavior, behavior, maxi(0, tick - 1))
 		_record_changes(state, action, _store.facing[dense], tick)
 		state.latest_position = _store.position_current[dense]
+	if probes.enabled:
+		probes.record(Probes.Tag.VISUAL_PUBLISH, Time.get_ticks_usec() - started_usec)
 
 func _new_state(handle: AgentHandle, action: int, facing: Vector2, tick: int) -> AnimationState:
 	var state := AnimationState.new()
@@ -241,6 +254,7 @@ func present(tick: int, alpha: float, direct: bool = false) -> void:
 	_ground.update_at(display_tick)
 	if probes.enabled:
 		probes.record(Probes.Tag.GRASS, Time.get_ticks_usec() - grass_start)
+	var bodies_start: int = Time.get_ticks_usec() if probes.enabled else 0
 	_begin_draw_list()
 	visible_count = 0
 	capture_visible_count = 0
@@ -265,10 +279,15 @@ func present(tick: int, alpha: float, direct: bool = false) -> void:
 			_queue_drawing(state.drawing)
 			visible_count += 1
 	_append_captures(display_tick, visible_world)
+	if probes.enabled:
+		probes.record(Probes.Tag.BODY_PREPARE, Time.get_ticks_usec() - bodies_start)
 	var sort_start: int = Time.get_ticks_usec()
 	_finish_draw_list()
 	sort_usec = Time.get_ticks_usec() - sort_start
+	var shadows_start: int = Time.get_ticks_usec() if probes.enabled else 0
 	_update_shadows()
+	if probes.enabled:
+		probes.record(Probes.Tag.SHADOWS, Time.get_ticks_usec() - shadows_start)
 	_update_selection(interpolation, direct)
 	queue_redraw()
 	render_build_usec = Time.get_ticks_usec() - started_usec
@@ -376,9 +395,12 @@ func _update_selection(alpha: float, direct: bool) -> void:
 func _draw() -> void:
 	if _catalog.texture == null:
 		return
+	var started_usec: int = Time.get_ticks_usec() if probes.enabled else 0
 	# One texture/material and one globally sorted body submission stream.
 	for entry: DrawEntry in _draw_list:
 		draw_texture_rect_region(_catalog.texture, entry.area, entry.region, entry.tint, false, true)
+	if probes.enabled:
+		probes.record(Probes.Tag.BODY_SUBMIT, Time.get_ticks_usec() - started_usec)
 
 func pick(world_point: Vector2) -> AgentHandle:
 	for index: int in range(_draw_list.size() - 1, -1, -1):

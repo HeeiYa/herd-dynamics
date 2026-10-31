@@ -6,8 +6,10 @@ extends RefCounted
 var path: String = ""
 var _file: FileAccess
 var _sequence: int = 0
+var _source: SimulationAccess
 
-func start(world: SimulationWorld, runner: SimulationRunner, output_path: String = "") -> bool:
+func start(world: SimulationAccess, runner: SimulationRunner, output_path: String = "") -> bool:
+	_source = world
 	path = output_path
 	if path.is_empty():
 		var directory: String = OS.get_executable_path().get_base_dir().path_join("observer-sessions")
@@ -47,6 +49,9 @@ func _append(record: Dictionary) -> void:
 		close()
 
 func close() -> void:
+	if _source != null and _source.observer_event.is_connected(_append):
+		_source.observer_event.disconnect(_append)
+	_source = null
 	if _file != null:
 		_file.close()
 		_file = null

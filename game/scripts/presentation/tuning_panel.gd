@@ -5,7 +5,7 @@ signal range_preview_changed(key: TuningCatalog.Param, radius: float, active: bo
 ## change) submits one TuningCatalog.Change to the world, which applies it at
 ## the next stage 0. While paused, submitted values show as pending.
 
-var _world: SimulationWorld
+var _world: SimulationAccess
 var _catalog: TuningCatalog
 var _rows: Array[Row] = []
 var _status: Label
@@ -23,7 +23,7 @@ class Row extends RefCounted:
 	# A reset discards the gesture until its release; no edit leaks into the new epoch.
 	var discard_drag: bool = false
 
-func setup(world: SimulationWorld) -> void:
+func setup(world: SimulationAccess) -> void:
 	_world = world
 	_catalog = world.tuning
 	add_theme_constant_override("separation", 4)

@@ -2,7 +2,7 @@ class_name GrabTool
 extends Node2D
 ## Observer intervention: lift one life and put it down elsewhere.
 ##
-## The tool only submits commands (SimulationWorld.queue_hold / queue_drop) and
+## The tool only submits commands (SimulationAccess.queue_hold / queue_drop) and
 ## draws previews. The world applies them at the next stage 0, so while paused
 ## the lifted body is a preview labelled "pending" until a step runs. Every
 ## record keeps the complete handle; a dead, removed, reset or recycled life
@@ -20,14 +20,15 @@ var camera_zoom: float = 1.0
 # Mirrors the runner each frame; paused commands are labelled as pending.
 var paused: bool = false
 
-var _world: SimulationWorld
+var _world: SimulationAccess
 var _view: WorldPresentation
 var _origin: Vector2 = Vector2.ZERO
+var _pointer_offset: Vector2 = Vector2.ZERO
 var _drop_position: Vector2 = Vector2.ZERO
 var _region: Array = []
 var _font: Font
 
-func setup(world: SimulationWorld, view: WorldPresentation) -> void:
+func setup(world: SimulationAccess, view: WorldPresentation) -> void:
 	_world = world
 	_view = view
 	_font = UiStyle.interface_theme().default_font
@@ -44,12 +45,16 @@ func begin(target: AgentHandle, world_point: Vector2) -> bool:
 	handle = target
 	# Cancellation restores the authoritative origin, not an interpolated foot.
 	_origin = _world.store.position_current[_world.store.resolve(target)]
+	_pointer_offset = _origin - world_point
 	_region = _view.body_region(target)
-	pointer_world = world_point
+	pointer_world = _origin
 	pointer_valid = true
 	state = State.CARRYING
 	_world.queue_hold(target)
 	return true
+
+func update_pointer(world_point: Vector2) -> void:
+	pointer_world = world_point + _pointer_offset
 
 ## Left release. Invalid places return the body where it was picked up.
 func release() -> void:

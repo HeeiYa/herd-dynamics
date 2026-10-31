@@ -14,7 +14,8 @@ class DecisionEntry extends RefCounted:
 		_due_tick = request_due_tick
 
 ## Public AI boundary. Time buckets enqueue once; FIFO queues retain deferred work.
-## One shared render-frame wall-clock budget covers all fixed-step catch-up calls.
+## The executor resets the wall-clock budget: once per render frame inline,
+## once per fixed step in the worker. Both policies use these same fair queues.
 var probes: Probes
 var store: AgentStore
 var grid: SpatialGrid
@@ -56,11 +57,11 @@ func setup(agent_store: AgentStore, spatial_grid: SpatialGrid, resource_grid: Re
 	intents = intent_buffer
 	config = simulation_config
 	coordination.setup(store, config, settings)
-	_trees.assign([
-		load("res://ai/trees/sheep.tres") as BehaviorTree,
-		load("res://ai/trees/wolf.tres") as BehaviorTree,
-		load("res://ai/trees/dog.tres") as BehaviorTree,
-	])
+	for path: String in ["res://ai/trees/sheep.tres", "res://ai/trees/wolf.tres", "res://ai/trees/dog.tres"]:
+		# A worker owns its templates as well as instances. Cloning must never
+		# overlap another executor's access to a cached mutable BT resource.
+		var cache_mode: ResourceLoader.CacheMode = ResourceLoader.CACHE_MODE_IGNORE_DEEP if config.detached_ai else ResourceLoader.CACHE_MODE_REUSE
+		_trees.append(ResourceLoader.load(path, "BehaviorTree", cache_mode) as BehaviorTree)
 	for tree: BehaviorTree in _trees:
 		assert(tree != null, "The three formal behavior tree resources must load.")
 
@@ -78,14 +79,20 @@ func register_agent(handle: AgentHandle, created_tick: int = -1) -> void:
 		context.species = species
 		context.name = "AgentContext"
 		add_child(context)
-		context.player = BTPlayer.new()
-		context.player.name = "BehaviorTree"
-		context.player.update_mode = BTPlayer.MANUAL
-		context.player.blackboard = Blackboard.new()
-		context.player.blackboard.set_var(AIBlackboard.CONTEXT, context)
-		context.player.set_scene_root_hint(context)
-		context.player.behavior_tree = _trees[species]
-		context.add_child(context.player)
+		var blackboard := Blackboard.new()
+		blackboard.set_var(AIBlackboard.CONTEXT, context)
+		if config.detached_ai:
+			assert(not is_inside_tree())
+			context.detached_tree = _trees[species].instantiate(context, blackboard, context, context)
+			assert(context.detached_tree != null)
+		else:
+			context.player = BTPlayer.new()
+			context.player.name = "BehaviorTree"
+			context.player.update_mode = BTPlayer.MANUAL
+			context.player.blackboard = blackboard
+			context.player.set_scene_root_hint(context)
+			context.player.behavior_tree = _trees[species]
+			context.add_child(context.player)
 	context.handle = handle
 	context.current_tick = birth_tick
 	context.last_decision_tick = birth_tick
@@ -100,7 +107,7 @@ func register_agent(handle: AgentHandle, created_tick: int = -1) -> void:
 	context.flock_center = context.protection_anchor
 	context.wander_until = 0
 	context.task_name = &"Waiting for first perception"
-	context.player.active = true
+	context.activate_tree(true)
 	contexts[handle.slot] = context
 	_schedule_perception(context, birth_tick + handle.slot % settings.calm_perception_ticks)
 	_schedule_decision(context, birth_tick + handle.slot % settings.calm_decision_ticks)
@@ -123,9 +130,8 @@ func suspend_agent(handle: AgentHandle) -> void:
 	if context == null or context.suspended:
 		return
 	context.suspended = true
-	context.player.active = false
-	if context.player.get_bt_instance() != null:
-		context.player.get_bt_instance().get_root_task().abort()
+	context.activate_tree(false)
+	context.abort_tree()
 	coordination.remove(handle)
 	knowledge.remove(handle)
 	intents.remove(handle)
@@ -145,7 +151,8 @@ func resume_agent(handle: AgentHandle, tick: int) -> void:
 	if context == null or not context.suspended:
 		return
 	context.suspended = false
-	context.player.active = true
+	context.awaiting_resume_perception = true
+	context.activate_tree(true)
 	context.current_tick = tick
 	context.committed_target = null
 	context.prey = null
@@ -153,7 +160,6 @@ func resume_agent(handle: AgentHandle, tick: int) -> void:
 	context.facts_dirty = true
 	context.task_name = &"Waiting for first perception"
 	_schedule_perception(context, tick)
-	_schedule_decision(context, tick + 1)
 
 func reset() -> void:
 	for slot: int in contexts:
@@ -276,6 +282,8 @@ func _enqueue_due(tick: int) -> void:
 		_decision_due.erase(tick)
 
 func _request_urgent(context: AgentContext, tick: int) -> void:
+	if context.awaiting_resume_perception:
+		return
 	if context.urgent_queued or context.suspended:
 		return
 	context.next_decision_tick = mini(context.next_decision_tick, tick)
@@ -301,6 +309,10 @@ func _run_perception(tick: int) -> bool:
 		var job_start: int = Time.get_ticks_usec() if probes.enabled else 0
 		var candidates_before: int = grid.candidate_count
 		perception.update(context, tick)
+		if context.awaiting_resume_perception:
+			context.awaiting_resume_perception = false
+			context.next_decision_tick = tick
+			_request_urgent(context, tick)
 		var publish_start: int = Time.get_ticks_usec() if probes.enabled else 0
 		knowledge.publish(context)
 		if probes.enabled:
@@ -361,10 +373,10 @@ func _run_decision(tick: int) -> bool:
 	if probes.enabled:
 		probes.record(Probes.Tag.DECISION_FACTS, Time.get_ticks_usec() - facts_start)
 	max_decision_delay_ticks = maxi(max_decision_delay_ticks, tick - entry.due_tick)
-	if context.player.get_bt_instance() != null:
+	if context.tree_instance() != null:
 		var elapsed: float = float(maxi(1, tick - context.last_decision_tick)) * config.fixed_dt
 		var update_start: int = Time.get_ticks_usec() if probes.enabled else 0
-		context.player.update(elapsed)
+		context.update_tree(elapsed)
 		if probes.enabled:
 			var elapsed_us: int = Time.get_ticks_usec() - update_start
 			probes.record(Probes.Tag.DECISION, elapsed_us)

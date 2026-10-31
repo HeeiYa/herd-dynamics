@@ -107,6 +107,9 @@ func follow(handle: AgentHandle) -> bool:
 	if handle == null or _position_source.call(handle) == null:
 		return false
 	follow_handle = handle
+	_animating_focus = false
+	_anchored_zoom = false
+	_target_focus = focus
 	_set_mode(Mode.FOLLOW)
 	# Following from the overview zooms in to a readable scale.
 	if zoom_level < 1.5:

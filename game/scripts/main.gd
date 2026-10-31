@@ -23,6 +23,7 @@ const TOP_BAR_HEIGHT: float = 52.0
 const PANEL_GAP: float = 10.0
 
 var _world: SimulationWorld
+var _access: SimulationAccess
 var _view: WorldPresentation
 var _runner: SimulationRunner
 var _camera: ObserverCamera
@@ -73,6 +74,10 @@ var _planner_label: Label
 func _ready() -> void:
 	if not has_meta("benchmark_view"):
 		for argument: String in OS.get_cmdline_user_args():
+			if argument == "--benchmark=execution":
+				get_tree().root.add_child.call_deferred(ExecutionBenchmark.new())
+				queue_free()
+				return
 			if argument in ["--benchmark=cpu", "--benchmark=frames", "--benchmark=threat", "--benchmark=threat-cohort"]:
 				get_tree().root.add_child.call_deferred(BenchmarkSession.new())
 				queue_free()
@@ -83,36 +88,63 @@ func _ready() -> void:
 	call_deferred("_initialize")
 
 func _initialize() -> void:
-	_world = SimulationWorld.new()
-	add_child(_world)
 	var scenario := ScenarioConfig.new()
 	scenario.layout = ScenarioConfig.Layout.NATURAL
-	_world.setup(SimulationConfig.new(), scenario)
-	_view = WorldPresentation.new(_world.probes)
+	var simulation_config := SimulationConfig.new()
+	simulation_config.motion_backend = SimulationConfig.MotionBackend.GPU
+	if has_meta("initial_scenario"):
+		scenario = get_meta("initial_scenario") as ScenarioConfig
+	if has_meta("initial_config"):
+		simulation_config = get_meta("initial_config") as SimulationConfig
+	for argument: String in OS.get_cmdline_user_args():
+		if argument == "--motion-backend=cpu":
+			simulation_config.motion_backend = SimulationConfig.MotionBackend.CPU
+		elif argument == "--gpu-bulk=0":
+			simulation_config.gpu_bulk_upload = false
+	var use_worker: bool = not has_meta("benchmark_view") and not has_meta("inline_simulation")
+	if has_meta("worker_benchmark"):
+		use_worker = bool(get_meta("worker_benchmark"))
+	for argument: String in OS.get_cmdline_user_args():
+		if argument == "--simulation=inline":
+			use_worker = false
+		elif argument.begins_with("--worker-ai-budget-usec="):
+			simulation_config.worker_ai_budget_usec = clampi(int(argument.trim_prefix("--worker-ai-budget-usec=")), 100, 100000)
+	if use_worker:
+		_access = SimulationAccess.threaded(simulation_config, scenario)
+	else:
+		_world = SimulationWorld.new()
+		add_child(_world)
+		_world.setup(simulation_config, scenario)
+		_access = SimulationAccess.local(_world)
+	_access.command_rejected.connect(_show_toast)
+	_view = WorldPresentation.new(_access.probes)
 	add_child(_view)
-	_view.setup(_world.store, _world.intents, _world.resources, _world.config)
-	_view.set_seed(_world.scenario.random_seed)
-	_world.captured.connect(_on_capture)
+	_view.setup(_access.store, _access.intents, _access.resources, _access.config)
+	_view.set_seed(_access.scenario.random_seed)
+	_access.captured.connect(_on_capture)
 	_insight = InsightOverlay.new()
 	add_child(_insight)
-	_insight.setup(_world, _view)
+	_insight.setup(_access, _view)
 	_grab = GrabTool.new()
 	add_child(_grab)
-	_grab.setup(_world, _view)
+	_grab.setup(_access, _view)
 	_grab.message.connect(_show_toast)
 	_camera = ObserverCamera.new()
 	add_child(_camera)
-	_camera.setup(_world.config.world_size, _view.display_foot)
+	_camera.setup(_access.config.world_size, _view.display_foot)
 	_camera.make_current()
 	_camera.follow_lost.connect(func() -> void: _show_toast("跟随的角色已离开牧场，镜头停在最后位置"))
 	_camera.mode_changed.connect(func(_mode: ObserverCamera.Mode) -> void: _refresh_panel())
 	_view.epoch_cleared.connect(_on_epoch_cleared)
 	_runner = SimulationRunner.new()
 	add_child(_runner)
-	_runner.setup(_world, _view)
+	if use_worker:
+		_runner.setup_threaded(_access, _view)
+	else:
+		_runner.setup(_world, _view)
 	if not has_meta("benchmark_view"):
 		_session_log = ObserverSessionLog.new()
-		_session_log.start(_world, _runner)
+		_session_log.start(_access, _runner)
 	_build_hud()
 	_tuning.range_preview_changed.connect(_insight.set_range_preview)
 	_runner.frame_updated.connect(_refresh_panel)
@@ -125,6 +157,8 @@ func _initialize() -> void:
 	_refresh_panel()
 
 func _exit_tree() -> void:
+	if _access != null and _access.executor != null:
+		_access.close()
 	if _session_log != null:
 		_session_log.close()
 
@@ -193,7 +227,7 @@ func _build_top_bar() -> void:
 	_time_label = Label.new()
 	_time_label.modulate = UiStyle.INK_SOFT
 	row.add_child(_time_label)
-	_pause = _button("暂停", func() -> void: _runner.request_pause(not _runner.paused), "空格")
+	_pause = _button("暂停", func() -> void: _runner.request_pause(not _runner.pause_requested), "空格")
 	_pause.custom_minimum_size.x = 64
 	row.add_child(_pause)
 	row.add_child(_button("单步", _runner.request_single_step, "N：推进一个固定模拟步"))
@@ -270,10 +304,10 @@ func _build_right_panel() -> void:
 	_right_panel.add_child(_tabs)
 	_inspector = AgentInspector.new()
 	_inspector.follow_requested.connect(_follow_selected)
-	_inspector.remove_requested.connect(func() -> void: _world.queue_remove(_selected))
+	_inspector.remove_requested.connect(func() -> void: _access.queue_remove(_selected))
 	_tabs.add_child(_scrolling(_inspector, "角色"))
 	_tuning = TuningPanel.new()
-	_tuning.setup(_world)
+	_tuning.setup(_access)
 	_tabs.add_child(_scrolling(_tuning, "参数"))
 	_tabs.add_child(_scrolling(_build_scenario_page(), "场景"))
 
@@ -291,12 +325,12 @@ func _build_scenario_page() -> VBoxContainer:
 	# Item ids equal the enum values, so numeric benchmark arguments still map.
 	for layout: int in ScenarioConfig.Layout.values():
 		_layout.add_item(LAYOUT_NAMES[layout], layout)
-	_layout.select(_layout.get_item_index(_world.scenario.layout))
+	_layout.select(_layout.get_item_index(_access.scenario.layout))
 	column.add_child(_layout)
-	_seed = _number(column, "种子", _world.scenario.random_seed, 0, 999999)
-	_sheep = _number(column, "初始羊数", _world.scenario.sheep_count, 0, 10000)
-	_wolves = _number(column, "初始狼数", _world.scenario.wolf_count, 0, 1000)
-	_dogs = _number(column, "初始犬数", _world.scenario.dog_count, 0, 1000)
+	_seed = _number(column, "种子", _access.scenario.random_seed, 0, 999999)
+	_sheep = _number(column, "初始羊数", _access.scenario.sheep_count, 0, 10000)
+	_wolves = _number(column, "初始狼数", _access.scenario.wolf_count, 0, 1000)
+	_dogs = _number(column, "初始犬数", _access.scenario.dog_count, 0, 1000)
 	column.add_child(_button("按这些初始条件重置 (R)", _reset_scenario))
 	_planner_label = Label.new()
 	_planner_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -305,9 +339,9 @@ func _build_scenario_page() -> VBoxContainer:
 	column.add_child(HSeparator.new())
 	column.add_child(_caption("运行中加入（下一模拟步生效）"))
 	var spawn_row := HBoxContainer.new()
-	spawn_row.add_child(_button("+20 羊", func() -> void: _world.queue_spawn(SimTypes.Species.SHEEP, 20)))
-	spawn_row.add_child(_button("+3 狼", func() -> void: _world.queue_spawn(SimTypes.Species.WOLF, 3)))
-	spawn_row.add_child(_button("+1 犬", func() -> void: _world.queue_spawn(SimTypes.Species.DOG, 1)))
+	spawn_row.add_child(_button("+20 羊", func() -> void: _access.queue_spawn(SimTypes.Species.SHEEP, 20)))
+	spawn_row.add_child(_button("+3 狼", func() -> void: _access.queue_spawn(SimTypes.Species.WOLF, 3)))
+	spawn_row.add_child(_button("+1 犬", func() -> void: _access.queue_spawn(SimTypes.Species.DOG, 1)))
 	column.add_child(spawn_row)
 	return column
 
@@ -447,8 +481,9 @@ func _select(handle: AgentHandle) -> void:
 		_camera.stop_follow()
 	_selected = handle
 	_view.set_selected(handle)
+	_access.select(handle)
 	if handle != null:
-		if not _panel_open and _ui_visible:
+		if not _panel_open and _ui_visible and not _grab.is_busy():
 			_toggle_panel()
 		_tabs.current_tab = 0
 	_refresh_panel()
@@ -481,7 +516,7 @@ func _reset_scenario() -> void:
 	_view.set_selected(null)
 
 func _is_inside_world(point: Vector2) -> bool:
-	return Rect2(Vector2.ZERO, _world.config.world_size).has_point(point)
+	return Rect2(Vector2.ZERO, _access.config.world_size).has_point(point)
 
 func _pointer_over_gui() -> bool:
 	return get_viewport().gui_get_hovered_control() != null
@@ -489,6 +524,7 @@ func _pointer_over_gui() -> bool:
 func _process(delta: float) -> void:
 	if _runner == null:
 		return
+	var started_usec: int = Time.get_ticks_usec() if _access.probes.enabled else 0
 	var mouse: Vector2 = get_viewport().get_mouse_position()
 	var on_pasture: bool = not _pointer_over_gui()
 	var world_point: Vector2 = _camera.screen_to_world(mouse)
@@ -498,17 +534,19 @@ func _process(delta: float) -> void:
 	if on_pasture and not _grab.is_busy() and _tool != Tool.PLACE:
 		_insight.hovered = _view.pick(world_point)
 	if _grab.state == GrabTool.State.CARRYING:
-		_grab.pointer_world = world_point
+		_grab.update_pointer(world_point)
 		_grab.pointer_valid = on_pasture and _is_inside_world(world_point)
 	_grab.update_state(_runner.paused)
 	_insight.refresh()
-	if _selected != null and not _world.store.is_alive(_selected):
+	if _selected != null and not _access.store.is_alive(_selected):
 		_selected = null
 	if _toast_seconds > 0.0:
 		_toast_seconds -= delta
 		_toast.modulate.a = clampf(_toast_seconds / 0.4, 0.0, 1.0)
 		if _toast_seconds <= 0.0:
 			_toast.visible = false
+	if _access.probes.enabled:
+		_access.probes.record(Probes.Tag.OBSERVER_UPDATE, Time.get_ticks_usec() - started_usec)
 
 func _show_toast(text: String) -> void:
 	if text.is_empty() or _toast == null:
@@ -533,7 +571,7 @@ func _input(event: InputEvent) -> void:
 		_camera.end_drag()
 	elif button.button_index == MOUSE_BUTTON_LEFT and _grab.state == GrabTool.State.CARRYING:
 		_grab.pointer_valid = not _pointer_over_gui() and _is_inside_world(_camera.screen_to_world(button.position))
-		_grab.pointer_world = _camera.screen_to_world(button.position)
+		_grab.update_pointer(_camera.screen_to_world(button.position))
 		_grab.release()
 		get_viewport().set_input_as_handled()
 
@@ -581,7 +619,7 @@ func _handle_left(pressed: bool, world_point: Vector2) -> void:
 		Tool.PLACE:
 			if pressed:
 				if _is_inside_world(world_point):
-					_world.queue_place(_place_species, world_point)
+					_access.queue_place(_place_species, world_point)
 					_show_toast("已提交放置%s%s" % [SimTypes.species_name(_place_species), "，单步或继续后出现" if _runner.paused else ""])
 				else:
 					_show_toast("只能放在牧场范围内")
@@ -591,7 +629,7 @@ func _handle_left(pressed: bool, world_point: Vector2) -> void:
 
 func _handle_key(event: InputEventKey) -> void:
 	match event.keycode:
-		KEY_SPACE: _runner.request_pause(not _runner.paused)
+		KEY_SPACE: _runner.request_pause(not _runner.pause_requested)
 		KEY_N: _runner.request_single_step()
 		KEY_R: _reset_scenario()
 		KEY_F: _follow_selected()
@@ -618,33 +656,42 @@ func _escape() -> void:
 func _refresh_panel() -> void:
 	if _runner == null or _pause == null:
 		return
-	var counts: PackedInt32Array = _world.counts()
-	var held: PackedInt32Array = _world.held_counts()
+	var started_usec: int = Time.get_ticks_usec() if _access.probes.enabled else 0
+	var counts: PackedInt32Array = _access.counts()
+	var held: PackedInt32Array = _access.held_counts()
 	var held_total: int = held[0] + held[1] + held[2]
 	_pause.text = "继续" if _runner.paused else "暂停"
-	_scene_label.text = "%s · 种子 %d" % [LAYOUT_NAMES[_world.scenario.layout], _world.scenario.random_seed]
+	if _runner.pause_requested != _runner.paused:
+		_pause.text = "等待中"
+	_scene_label.text = "%s · 种子 %d" % [LAYOUT_NAMES[_access.scenario.layout], _access.scenario.random_seed]
 	var count_text: String = "羊 %d   狼 %d   犬 %d" % [counts[0], counts[1], counts[2]]
 	if held_total > 0:
 		count_text += "   （提起 %d，不参与互动）" % held_total
 	_counts_label.text = count_text
 	var camera_text: String = ["总览", "自由", "跟随"][_camera.mode]
-	_time_label.text = "%s · %.1fs · 捕获 %d · 镜头 %s %.2f×" % ["已暂停" if _runner.paused else "运行", _world.tick * _world.config.fixed_dt, _world.capture_count, camera_text, _camera.zoom_level]
+	_time_label.text = "%s · %.1fs · 捕获 %d · 镜头 %s %.2f×" % ["已暂停" if _runner.paused else "运行", _access.tick * _access.config.fixed_dt, _access.capture_count, camera_text, _camera.zoom_level]
 	_perf_summary.text = "帧 P95 %.1f ms · 可见 %d" % [_runner.frame_percentile(0.95), _view.visible_count]
+	if _access.executor != null and not _runner.paused and _runner.snapshot_age_msec > 100.0:
+		_perf_summary.text += " · 等待模拟"
 	if _perf_details:
 		var statistics := PackedStringArray([
-			"模拟 %d · 参与互动 %d · 容量 %d" % [_world.store.count, _world.store.count - held_total, _world.store.capacity],
+			"运动后端：%s" % _access.motion_backend_status,
+			"模拟 %d · 参与互动 %d · 容量 %d" % [_access.store.count, _access.store.count - held_total, _access.store.capacity],
 			"帧间隔 P95 %.1f / P99 %.1f ms" % [_runner.frame_percentile(0.95), _runner.frame_percentile(0.99)],
 			"循环 CPU %.2f ms · 积压 %.3fs" % [_runner.cpu_frame_msec, _runner.accumulator_seconds],
-			"上步 AI %.2f / 运动 %.2f / 交互 %.2f ms" % [_world.phase_usec[3] / 1000.0, _world.phase_usec[4] / 1000.0, _world.phase_usec[5] / 1000.0],
-			"感知 / 决策逾期 %d / %d tick" % [_world.ai.max_perception_delay_ticks, _world.ai.max_decision_delay_ticks],
-			"网格最密 %d · 候选访问 %d" % [_world.grid.max_occupancy, _world.grid.candidate_count],
+			"上步 AI %.2f / 运动 %.2f / 交互 %.2f ms" % [_access.phase_usec[3] / 1000.0, _access.phase_usec[4] / 1000.0, _access.phase_usec[5] / 1000.0],
+			"感知 / 决策逾期 %d / %d tick" % [_access.max_perception_delay_ticks, _access.max_decision_delay_ticks],
+			"网格最密 %d · 候选访问 %d" % [_access.grid_max_occupancy, _access.grid_candidate_count],
 			"表现准备 %.2f ms · 状态标记 %d" % [_view.render_build_usec / 1000.0, _insight.active_mark_count()],
 		])
+		if _access.executor != null:
+			statistics.append("后台模拟 · 数据年龄 %.1fms · 缺失意图 %d" % [_runner.snapshot_age_msec, _access.publication.missing_intents])
 		_stats.text = "\n".join(statistics)
-	var planner: SpawnPlanner = _world.spawn_planner
-	_planner_label.text = "当前布局：" + (planner.describe() if planner != null else "V1 固定算法")
-	_inspector.refresh(_world, _selected)
+	_planner_label.text = "当前布局：" + _access.planner_description
+	_inspector.refresh(_access, _selected)
 	_tuning.refresh(_runner.paused)
+	if _access.probes.enabled:
+		_access.probes.record(Probes.Tag.HUD_REFRESH, Time.get_ticks_usec() - started_usec)
 
 func _on_capture(event: CaptureEvent) -> void:
 	_view.add_capture(event.target, event.position, event.facing, event.tick)

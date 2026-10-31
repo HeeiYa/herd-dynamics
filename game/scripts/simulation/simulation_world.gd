@@ -35,10 +35,16 @@ var _pending_holds: Array[AgentHandle] = []
 var _pending_drops: Array[DropCommand] = []
 var _pending_places: Array[PlaceCommand] = []
 var _pending_tuning: Array[TuningCatalog.Change] = []
+# Full identity keys accept equivalent handle objects and survive until removal.
+var _grab_origins: Dictionary[String, Vector2] = {}
 var _random := RandomNumberGenerator.new()
 # Planned layouts own their placement stream; V1 layouts keep _random.
 var spawn_planner: SpawnPlanner
 var tuning: TuningCatalog
+
+func _exit_tree() -> void:
+	if motion != null:
+		motion.close()
 
 func setup(settings: SimulationConfig, initial: ScenarioConfig) -> void:
 	config = settings
@@ -71,6 +77,7 @@ func reset(initial: ScenarioConfig) -> void:
 	_pending_drops.clear()
 	_pending_places.clear()
 	_pending_tuning.clear()
+	_grab_origins.clear()
 	spawn_planner = SpawnPlanner.new(config, scenario) if ScenarioConfig.is_planned(scenario.layout) else null
 	pending_spawns = PackedInt32Array([scenario.sheep_count, scenario.wolf_count, scenario.dog_count])
 	phase_usec.fill(0)
@@ -123,7 +130,7 @@ func cancel_grab(handle: AgentHandle, origin: Vector2) -> bool:
 		if _pending_drops[index].handle.same_life(handle):
 			_pending_drops.remove_at(index)
 	if store.is_held(handle):
-		queue_drop(handle, origin)
+		queue_drop(handle, _grab_origins.get(handle.key(), origin))
 		return true
 	return false
 
@@ -229,6 +236,8 @@ func _hold(handle: AgentHandle) -> void:
 	# A dead, removed or recycled life simply has nothing to lift.
 	if not store.is_active(handle):
 		return
+	var dense: int = store.resolve(handle)
+	_grab_origins[handle.key()] = store.position_current[dense]
 	store.set_held(handle, true)
 	interaction.suspend(handle)
 	ai.suspend_agent(handle)
@@ -240,6 +249,7 @@ func _drop(handle: AgentHandle, position: Vector2) -> void:
 	var body: float = store.radius[store.resolve(handle)]
 	store.relocate(handle, position.clamp(Vector2.ONE * body, config.world_size - Vector2.ONE * body))
 	store.set_held(handle, false)
+	_grab_origins.erase(handle.key())
 	ai.resume_agent(handle, tick)
 	_record_placement("drop", handle, store.position_current[store.resolve(handle)])
 
@@ -254,6 +264,7 @@ func record_observer_event(action: String, fields: Dictionary = {}) -> void:
 	observer_event.emit(record)
 
 func _remove(handle: AgentHandle) -> void:
+	_grab_origins.erase(handle.key())
 	# Coordinator invalidates ownership before the slot can be reused.
 	ai.unregister_agent(handle)
 	interaction.remove(handle)

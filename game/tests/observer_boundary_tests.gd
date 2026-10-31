@@ -24,6 +24,7 @@ func _world() -> SimulationWorld:
 
 func _run() -> void:
 	await _test_cancel_grab()
+	await _test_grab_origin_lifetime()
 	await _test_parameter_boundary()
 	await _test_slider_input()
 	await _test_observation_clock()
@@ -38,7 +39,7 @@ func _test_cancel_grab() -> void:
 	root.add_child(view)
 	var grab := GrabTool.new()
 	root.add_child(grab)
-	grab.setup(world, view)
+	grab.setup(SimulationAccess.local(world), view)
 	var origin := Vector2(300, 300)
 	var handle: AgentHandle = world.create_at(SimTypes.Species.WOLF, origin)
 	var target: AgentHandle = world.create_at(SimTypes.Species.SHEEP, Vector2(500, 300))
@@ -72,6 +73,25 @@ func _test_cancel_grab() -> void:
 	_check(world.store.is_held(replacement), "A stale cancellation cannot withdraw another life's hold")
 	grab.queue_free()
 	view.queue_free()
+	world.queue_free()
+	await process_frame
+
+func _test_grab_origin_lifetime() -> void:
+	var world: SimulationWorld = _world()
+	var handle: AgentHandle = world.create_at(SimTypes.Species.SHEEP, Vector2(300, 300))
+	var equivalent := AgentHandle.new(handle.slot, handle.generation, handle.world_epoch)
+	world.queue_hold(equivalent)
+	world._apply_commands()
+	_check(world._grab_origins.has(handle.key()), "Grab origin belongs to the complete life identity")
+	world.queue_remove(equivalent)
+	world._apply_commands()
+	_check(world._grab_origins.is_empty(), "Equivalent full identity removes the retained grab origin")
+	var replacement: AgentHandle = world.create_at(SimTypes.Species.SHEEP, Vector2(500, 500))
+	world.queue_hold(replacement)
+	world._apply_commands()
+	world.queue_remove(equivalent)
+	world._apply_commands()
+	_check(world.store.is_held(replacement) and world._grab_origins.has(replacement.key()), "Stale removal preserves the replacement life's origin")
 	world.queue_free()
 	await process_frame
 
@@ -118,7 +138,7 @@ func _test_slider_input() -> void:
 	var world: SimulationWorld = _world()
 	var panel := TuningPanel.new()
 	root.add_child(panel)
-	panel.setup(world)
+	panel.setup(SimulationAccess.local(world))
 	panel.size.x = 400.0
 	var overlay := InsightOverlay.new()
 	panel.range_preview_changed.connect(overlay.set_range_preview)
@@ -167,7 +187,7 @@ func _test_observation_clock() -> void:
 	var inspector := AgentInspector.new()
 	var intent := MotionIntent.new()
 	intent.target = sheep
-	_check(inspector._target_text(world, context, intent).contains("已失效"), "Inspector explains expired knowledge while the job is delayed")
+	_check(inspector._target_text(SimulationAccess.local(world), AgentInspection.capture(world, wolf), intent).contains("已失效"), "Inspector explains expired knowledge while the job is delayed")
 	_check(context.current_tick == 5, "Inspection never advances the AI clock")
 	sighting.expires_tick = 30
 	world.store.relocate(sheep, Vector2(1400, 900))
@@ -210,7 +230,7 @@ func _test_session_record() -> void:
 	runner.world = world
 	var log := ObserverSessionLog.new()
 	var path: String = ProjectSettings.globalize_path("res://.godot/observer-tests/session-%d.jsonl" % Time.get_ticks_usec())
-	var opened: bool = log.start(world, runner, path)
+	var opened: bool = log.start(SimulationAccess.local(world), runner, path)
 	_check(opened, "Local session evidence opens successfully")
 	if not opened:
 		runner.free()

@@ -8,6 +8,26 @@ var _intents: IntentBuffer
 var _config: SimulationConfig
 var _neighbors: Array[int] = []
 var _crowd_field: CrowdMotionField
+var _gpu: GpuMotionKernel
+var _gpu_attempted: bool = false
+var backend_status: String = "cpu"
+
+func close() -> void:
+	if _gpu != null:
+		_gpu.close()
+		_gpu = null
+	_gpu_attempted = false
+
+func reset_backend_metrics() -> void:
+	if _gpu != null:
+		_gpu.reset_metrics()
+
+func backend_metrics() -> Dictionary:
+	var result: Dictionary = _gpu.metrics() if _gpu != null else {}
+	result["active_backend"] = backend_status
+	result["requested_backend"] = SimulationConfig.MotionBackend.keys()[_config.motion_backend]
+	result["steering_timers_available"] = backend_status != "gpu"
+	return result
 
 # Last fixed-step counters. Consumers must not sum frame snapshots as though
 # they were all steps; the frame can contain zero, one or several fixed steps.
@@ -32,6 +52,8 @@ func setup(store: AgentStore, grid: SpatialGrid, intents: IntentBuffer, config: 
 
 func step(tick: int, dt: float) -> void:
 	_prepare_step()
+	if _run_gpu(tick, dt):
+		return
 	for dense: int in range(_store.count):
 		if _store.alive[dense] == 0:
 			continue
@@ -81,6 +103,36 @@ func step(tick: int, dt: float) -> void:
 		field_cell_visits = _crowd_field.cell_visits
 		exact_candidate_visits = _crowd_field.exact_candidate_visits
 		aggregate_agent_contributions = _crowd_field.aggregate_agent_contributions
+
+func _run_gpu(tick: int, dt: float) -> bool:
+	if _config.motion_backend != SimulationConfig.MotionBackend.GPU:
+		backend_status = "cpu"
+		return false
+	if not _config.crowd_motion_enabled:
+		backend_status = "cpu: GPU prototype requires crowd field"
+		return false
+	if not _gpu_attempted:
+		_gpu_attempted = true
+		_gpu = GpuMotionKernel.new()
+		if not _gpu.initialize():
+			_gpu = null
+			push_warning("GPU motion unavailable; explicit CPU fallback is recorded in backend metrics.")
+	if _gpu == null:
+		backend_status = "cpu: RenderingDevice initialization failed"
+		return false
+	backend_status = "gpu"
+	if _store.count == 0:
+		return true
+	_gpu.run(_store, _intents, _crowd_field, _config, tick, dt)
+	field_agent_count = _gpu.field_agent_count
+	exact_agent_count = _gpu.exact_agent_count
+	field_cell_visits = _crowd_field.cell_visits + _gpu.cell_visits
+	exact_candidate_visits = _gpu.candidate_visits
+	exact_neighbor_visits = _gpu.neighbor_visits
+	aggregate_agent_contributions = _gpu.contributions
+	moving_agent_count = _gpu.moving_count
+	displacement_sum = _gpu.displacement_sum
+	return true
 
 func _prepare_step() -> void:
 	field_build_usec = 0

@@ -45,6 +45,7 @@ func _run() -> void:
 		world.ai.begin_frame()
 		world.step()
 	world.probes.reset_window()
+	world.motion.reset_backend_metrics()
 	var timings: Array[float] = []
 	var rows: Array[PackedStringArray] = []
 	var started: int = Time.get_ticks_usec()
@@ -68,6 +69,7 @@ func _run() -> void:
 	var wall_seconds: float = float(Time.get_ticks_usec() - started) / 1000000.0
 	timings.sort()
 	var summary: Dictionary = {
+		"motion_backend": world.motion.backend_metrics(),
 		"instrumentation": world.probes.summary(),
 		"compact_flock_knowledge": world.config.compact_flock_knowledge,
 		"shared_cell_candidates": world.config.shared_cell_candidates,
@@ -114,6 +116,8 @@ func _run() -> void:
 	get_tree().quit(0)
 
 func _run_rendered() -> void:
+	if _options.has("vsync"):
+		DisplayServer.window_set_vsync_mode(int(_options["vsync"]) as DisplayServer.VSyncMode)
 	var packed: PackedScene = load("res://scenes/main.tscn") as PackedScene
 	var main: Node2D = packed.instantiate() as Node2D
 	main.set_meta("benchmark_view", true)
@@ -121,6 +125,11 @@ func _run_rendered() -> void:
 	get_tree().current_scene = main
 	await get_tree().process_frame
 	await get_tree().process_frame
+	# An unattended benchmark must not consume the user's desktop key presses
+	# or GUI clicks as pause/reset/tuning commands during the measurement.
+	main.set_process_input(false)
+	main.set_process_unhandled_input(false)
+	get_tree().root.gui_disable_input = true
 	main._seed.value = int(_options.get("seed", "42"))
 	main._sheep.value = int(_options.get("sheep", str(main._world.scenario.sheep_count)))
 	main._wolves.value = int(_options.get("wolves", str(main._world.scenario.wolf_count)))
@@ -137,15 +146,36 @@ func _run_rendered() -> void:
 	world.config.instrument_enabled = world.probes.enabled
 	var runner: SimulationRunner = main._runner
 	var view: WorldPresentation = main._view
+	var viewport_rid: RID = get_tree().root.get_viewport_rid()
+	var measure_gpu: bool = _options.get("measure-gpu", "0") == "1"
+	RenderingServer.viewport_set_measure_render_time(viewport_rid, measure_gpu)
 	var warmup_seconds: float = float(_options.get("warmup-seconds", "10"))
 	var sample_seconds: float = float(_options.get("sample-seconds", "60"))
 	var warmup_start: int = Time.get_ticks_usec()
+	var warmup_max_backlog: float = 0.0
+	var warmup_max_cpu_ms: float = 0.0
 	while float(Time.get_ticks_usec() - warmup_start) / 1000000.0 < warmup_seconds:
 		await RenderingServer.frame_post_draw
+		warmup_max_backlog = maxf(warmup_max_backlog, runner.accumulator_seconds)
+		warmup_max_cpu_ms = maxf(warmup_max_cpu_ms, runner.cpu_frame_msec)
+	var observer_view: String = _options.get("observer-view", "default")
+	if world.config.motion_backend == SimulationConfig.MotionBackend.GPU and world.motion.backend_status != "gpu":
+		push_error("Requested GPU benchmark did not execute on GPU: " + world.motion.backend_status)
+		get_tree().quit(1)
+		return
+	if not _configure_observer_view(main, observer_view):
+		get_tree().quit(1)
+		return
+	# Let selection/overlay changes render before beginning the steady window.
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
 	world.probes.reset_window()
+	world.motion.reset_backend_metrics()
 	var timings: Array[float] = []
 	var rows: Array[PackedStringArray] = []
 	var start_tick: int = world.tick
+	var start_counts: PackedInt32Array = world.counts()
+	var start_captures: int = world.capture_count
 	var start_time: int = Time.get_ticks_usec()
 	var previous_time: int = start_time
 	var min_visible: int = view.visible_count
@@ -176,10 +206,18 @@ func _run_rendered() -> void:
 			row.append(str(runner.frame_phase_usec[phase]))
 		row.append_array(world.probes.step_columns())
 		row.append_array(_activity_columns(world))
+		row.append_array(PackedStringArray([
+			str(runner.frame_observe_usec), str(runner.frame_field_build_usec),
+			str(runner.frame_field_sample_usec), str(runner.frame_exact_sample_usec),
+			str(runner.frame_moved_agent_steps), str(runner.frame_displacement_pixels),
+			str(RenderingServer.viewport_get_measured_render_time_cpu(viewport_rid)),
+			str(RenderingServer.viewport_get_measured_render_time_gpu(viewport_rid)),
+		]))
 		rows.append(row)
 	var elapsed: float = float(Time.get_ticks_usec() - start_time) / 1000000.0
 	timings.sort()
 	var summary: Dictionary = {
+		"motion_backend": world.motion.backend_metrics(),
 		"instrumentation": world.probes.summary(),
 		"compact_flock_knowledge": world.config.compact_flock_knowledge,
 		"shared_cell_candidates": world.config.shared_cell_candidates,
@@ -194,6 +232,11 @@ func _run_rendered() -> void:
 		"gpu": RenderingServer.get_video_adapter_name(), "rendering_method": RenderingServer.get_current_rendering_method(),
 		"os": OS.get_name(), "os_version": OS.get_version(),
 		"resolution": [get_tree().root.size.x, get_tree().root.size.y], "camera_zoom": main._camera.zoom.x,
+		"display_refresh_hz": DisplayServer.screen_get_refresh_rate(DisplayServer.window_get_current_screen()),
+		"observer_view": observer_view, "observer_panel_open": main._panel_open,
+		"paused_at_end": runner.paused, "time_scale": runner.speed,
+		"gpu_measurement_enabled": measure_gpu,
+		"gpu_measurement_scope": "Main viewport render timestamp, may lag the sampled frame; excludes scripts and static decoration bake. Zero is unavailable, not zero GPU cost.",
 		"vsync_mode": DisplayServer.window_get_vsync_mode(), "engine_max_fps": Engine.max_fps,
 		"seed": world.scenario.random_seed, "layout": world.scenario.layout,
 		"initial": [world.scenario.sheep_count, world.scenario.wolf_count, world.scenario.dog_count],
@@ -201,6 +244,10 @@ func _run_rendered() -> void:
 		"fixed_dt": world.config.fixed_dt, "grid_cell_size": world.config.cell_size,
 		"ai_budget_usec_per_render_frame": world.config.ai_budget_usec,
 		"warmup_seconds": warmup_seconds, "sample_wall_seconds": elapsed, "sample_frames": timings.size(),
+		"warmup_max_backlog_seconds": warmup_max_backlog, "warmup_max_runner_cpu_ms": warmup_max_cpu_ms,
+		"sample_start_tick": start_tick, "sample_end_tick": world.tick,
+		"sample_start_counts": Array(start_counts), "sample_captures": world.capture_count - start_captures,
+		"final_quality_snapshot": _quality_snapshot(world),
 		"sort_fallback_frames": sort_fallback_frames, "sort_moves_total": sort_moves_total,
 		"simulation_seconds_per_wall_second": (world.tick - start_tick) * world.config.fixed_dt / elapsed,
 		"frame_p50_ms": _percentile(timings, 0.5), "frame_p95_ms": _percentile(timings, 0.95),
@@ -224,7 +271,10 @@ func _run_rendered() -> void:
 		"tick", "frame_interval_ms", "runner_cpu_ms", "render_build_us", "sort_us",
 		"sheep", "wolves", "dogs", "visible", "backlog_seconds", "steps",
 		"engine_draw_calls", "commands_us", "coordination_us", "grid_us", "ai_us", "motion_us", "interaction_us", "publish_us"
-	]) + world.probes.column_names() + _activity_names())
+	]) + world.probes.column_names() + _activity_names() + PackedStringArray([
+		"observe_published_frame_us", "field_build_frame_us", "field_sample_frame_us", "exact_sample_frame_us",
+		"moved_agent_steps", "displacement_frame_pixels", "viewport_render_cpu_ms", "viewport_render_gpu_ms"
+	]))
 	for row: PackedStringArray in rows:
 		csv.store_csv_line(row)
 	csv.close()
@@ -240,7 +290,71 @@ func _run_rendered() -> void:
 func _percentile(sorted: Array[float], fraction: float) -> float:
 	return sorted[clampi(ceili(sorted.size() * fraction) - 1, 0, sorted.size() - 1)]
 
+## Overlay comparison keeps the same camera and collapsed panel in all modes.
+## It changes presentation only; no observer command reaches the simulation.
+func _configure_observer_view(main: Node2D, mode: String) -> bool:
+	if mode not in ["default", "selected", "debug"]:
+		push_error("Unknown observer-view: " + mode)
+		return false
+	if mode == "default":
+		return true
+	var world: SimulationWorld = main._world
+	var selected: AgentHandle
+	for dense: int in world.store.count:
+		if world.store.species[dense] == SimTypes.Species.WOLF:
+			selected = world.store.handle_at(dense)
+			break
+	if selected == null and world.store.count > 0:
+		selected = world.store.handle_at(0)
+	# _select would open the panel and refit the overview, changing the workload.
+	main._selected = selected
+	main._view.set_selected(selected)
+	if mode == "debug":
+		for key: StringName in main._overlay_buttons:
+			main._overlay_buttons[key].set_pressed_no_signal(true)
+		main._sync_overlays()
+		main._perf_details = true
+	main._refresh_panel()
+	return true
+
+## Post-window diagnostic. Includes missing/unserved agents rather than taking
+## only successful jobs as the denominator. This is not threat-response latency.
+func _quality_snapshot(world: SimulationWorld) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for species: int in 3:
+		var active: int = 0
+		var never_perceived: int = 0
+		var missing_intent: int = 0
+		var perception_ages: Array[float] = []
+		var decision_ages: Array[float] = []
+		for dense: int in world.store.count:
+			if world.store.species[dense] != species:
+				continue
+			var handle: AgentHandle = world.store.handle_at(dense)
+			if not world.store.is_active(handle):
+				continue
+			active += 1
+			var context: AgentContext = world.ai.inspect(handle)
+			if context.last_perception_tick < 0:
+				never_perceived += 1
+			else:
+				perception_ages.append(world.tick - context.last_perception_tick)
+			decision_ages.append(world.tick - context.last_decision_tick)
+			if world.intents.get_intent(handle, world.tick) == null:
+				missing_intent += 1
+		perception_ages.sort()
+		decision_ages.sort()
+		result.append({"species": species, "active": active, "never_perceived": never_perceived,
+			"missing_or_expired_intent": missing_intent,
+			"perception_age_p95_ticks": _percentile(perception_ages, 0.95) if not perception_ages.is_empty() else -1,
+			"decision_age_p95_ticks": _percentile(decision_ages, 0.95) if not decision_ages.is_empty() else -1})
+	return result
+
 func _configure_backends(config: SimulationConfig) -> void:
+	var backend: String = _options.get("motion-backend", SimulationConfig.MotionBackend.keys()[config.motion_backend].to_lower())
+	assert(backend in ["cpu", "gpu"], "Unknown motion backend")
+	config.motion_backend = SimulationConfig.MotionBackend.GPU if backend == "gpu" else SimulationConfig.MotionBackend.CPU
+	config.gpu_bulk_upload = _options.get("gpu-bulk", str(int(config.gpu_bulk_upload))) == "1"
 	config.crowd_prefix_counts = _options.get("prefix-counts", str(int(config.crowd_prefix_counts))) == "1"
 	config.incremental_render_sort = _options.get("incremental-sort", str(int(config.incremental_render_sort))) == "1"
 	config.shared_cell_candidates = _options.get("shared-candidates", str(int(config.shared_cell_candidates))) == "1"

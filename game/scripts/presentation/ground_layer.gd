@@ -72,6 +72,10 @@ class Decorations extends Node2D:
 				draw_circle(point, 1.6, petal, true, -1.0, true)
 				draw_circle(point, 0.6, Color("c8873a"), true, -1.0, true)
 
+func bind_resources(resources: ResourceGrid) -> void:
+	assert(resources.cell_count == _levels.size())
+	_resources = resources
+
 func configure(resources: ResourceGrid, world_size: Vector2, detail: Texture2D) -> void:
 	_resources = resources
 	_world_size = world_size

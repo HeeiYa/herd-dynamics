@@ -1,5 +1,14 @@
 class_name SimulationConfig
 extends Resource
+enum MotionBackend { CPU, GPU }
+@export var motion_backend: MotionBackend = MotionBackend.CPU
+## Diagnostic A/B switch: both uploads feed the same numerical shader.
+@export var gpu_bulk_upload: bool = true
+## Owned by a dedicated executor; its Nodes never enter the active SceneTree.
+@export var detached_ai: bool = false
+## Independent executor service allowance per fixed step, including coordination.
+## This is distinct from the legacy ai_budget_usec per render frame.
+@export var worker_ai_budget_usec: int = 6000
 ## Durations ending in _ticks use the single fixed simulation clock.
 @export var instrument_enabled: bool = false
 @export var incremental_render_sort: bool = true
