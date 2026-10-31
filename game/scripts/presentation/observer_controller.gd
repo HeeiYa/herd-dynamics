@@ -40,6 +40,7 @@ func setup(access: SimulationAccess, view: WorldPresentation, runner: Simulation
 	hud.speed_changed.connect(func(index: int) -> void: _runner.set_speed(SPEEDS[index]))
 	hud.species_changed.connect(func(species: int) -> void: _place_species = species)
 	hud.overlays_changed.connect(sync_overlays)
+	hud.tuning.regeneration_requested.connect(reset_scenario)
 	hud.inspector.follow_requested.connect(follow_selected)
 	hud.inspector.remove_requested.connect(func() -> void: _access.queue_remove(_selected))
 	hud.tuning.setup(_access.tuning, _access.queue_tuning)
@@ -60,6 +61,8 @@ func setup(access: SimulationAccess, view: WorldPresentation, runner: Simulation
 	refresh_panel()
 
 func apply_scenario(scenario: ScenarioConfig) -> void:
+	if scenario.pasture != null:
+		hud.tuning.apply_generation_draft(scenario.pasture)
 	hud.layout.select(hud.layout.get_item_index(scenario.layout))
 	hud.seed.value = scenario.random_seed
 	hud.sheep.value = scenario.sheep_count
@@ -126,6 +129,7 @@ func _on_epoch_cleared() -> void:
 	if _insight != null:
 		_insight.clear()
 	if _camera != null:
+		_camera.set_world_size(_access.config.world_size)
 		_camera.show_overview(false, _zoom)
 
 func reset_scenario() -> void:
@@ -135,6 +139,10 @@ func reset_scenario() -> void:
 	scenario.sheep_count = int(hud.sheep.value)
 	scenario.wolf_count = int(hud.wolves.value)
 	scenario.dog_count = int(hud.dogs.value)
+	scenario.pasture = hud.tuning.generation_draft()
+	if scenario.pasture == null:
+		hud.show_toast("场地参数无效")
+		return
 	if _grab.is_busy():
 		_grab.cancel()
 	_runner.request_reset(scenario)

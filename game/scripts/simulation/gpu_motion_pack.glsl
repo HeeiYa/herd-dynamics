@@ -26,6 +26,7 @@ layout(push_constant, std430) uniform Parameters {
     vec4 grid_size_radius;
     vec4 acceleration_arrival_separation_facing;
     vec4 alignment_cohesion;
+    vec4 sparse_cells_blocks_mask;
 } parameters;
 
 vec2 actor_vector2(int offset) {
@@ -89,7 +90,7 @@ void pack_cell(int index, int count) {
 
 void main() {
     int index = int(gl_GlobalInvocationID.x);
-    int cell_count = int(parameters.grid_size_radius.x) * int(parameters.grid_size_radius.y);
+    int cell_count = int(parameters.sparse_cells_blocks_mask.x);
     if (index < int(parameters.world_dt_count.w)) pack_actor(index);
     if (index < cell_count) pack_cell(index, cell_count);
 }

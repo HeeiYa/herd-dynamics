@@ -23,6 +23,10 @@ func _run() -> void:
 		await _run_rendered()
 		return
 	var config := SimulationConfig.new()
+	if not PastureBenchmarkOptions.apply_to(config, _options):
+		push_error("Invalid pasture benchmark options")
+		get_tree().quit(1)
+		return
 	config.instrument_enabled = _options.get("instrument", "1") == "1"
 	config.compact_flock_knowledge = _options.get("compact-flock", "1") == "1"
 	_configure_backends(config)
@@ -71,6 +75,7 @@ func _run() -> void:
 	var summary: Dictionary = {
 		"motion_backend": world.motion.backend_metrics(),
 		"instrumentation": world.probes.summary(),
+		"pasture": PastureBenchmarkOptions.describe(world.config),
 		"compact_flock_knowledge": world.config.compact_flock_knowledge,
 		"shared_cell_candidates": world.config.shared_cell_candidates,
 		"crowd_motion_enabled": world.config.crowd_motion_enabled,
@@ -136,6 +141,12 @@ func _run_rendered() -> void:
 	initial.wolf_count = int(_options.get("wolves", str(main._world.scenario.wolf_count)))
 	initial.dog_count = int(_options.get("dogs", str(main._world.scenario.dog_count)))
 	initial.layout = int(_options.get("layout", "0")) as ScenarioConfig.Layout
+	var geometry_config: SimulationConfig = main._world.config.duplicate() as SimulationConfig
+	if not PastureBenchmarkOptions.apply_to(geometry_config, _options):
+		push_error("Invalid pasture benchmark options")
+		get_tree().quit(1)
+		return
+	initial.pasture = PastureSettings.from_config(geometry_config)
 	main.observer.apply_scenario(initial)
 	main.observer.reset_scenario()
 	main.observer._zoom = float(_options.get("view-scale", str(main.observer._zoom)))
@@ -221,6 +232,7 @@ func _run_rendered() -> void:
 	var summary: Dictionary = {
 		"motion_backend": world.motion.backend_metrics(),
 		"instrumentation": world.probes.summary(),
+		"pasture": PastureBenchmarkOptions.describe(world.config),
 		"compact_flock_knowledge": world.config.compact_flock_knowledge,
 		"shared_cell_candidates": world.config.shared_cell_candidates,
 		"crowd_motion_enabled": world.config.crowd_motion_enabled,
@@ -367,7 +379,7 @@ func _activity_names() -> PackedStringArray:
 		"shared_hits_last_step", "shared_builds_last_step", "shared_fallbacks_last_step", "shared_candidates_last_step", "shared_filter_visits_last_step",
 		"moved_sheep_last_step", "moved_wolves_last_step", "moved_dogs_last_step", "displacement_pixels_last_step",
 		"field_build_us_last_step", "field_sample_us_last_step", "exact_sample_us_last_step",
-		"field_agents_last_step", "exact_agents_last_step", "field_cell_visits_last_step", "exact_candidates_last_step", "exact_neighbors_last_step", "aggregate_contributions_last_step"
+		"field_agents_last_step", "exact_agents_last_step", "field_cell_visits_last_step", "exact_candidates_last_step", "exact_neighbors_last_step", "aggregate_contributions_last_step", "grass_food_last_step", "perception_cells", "motion_cells"
 	])
 
 func _activity_columns(world: SimulationWorld) -> PackedStringArray:
@@ -384,7 +396,7 @@ func _activity_columns(world: SimulationWorld) -> PackedStringArray:
 		str(world.grid.shared_hits), str(world.grid.shared_builds), str(world.grid.shared_fallbacks), str(world.grid.shared_candidate_references), str(world.grid.shared_filter_visits),
 		str(moved[0]), str(moved[1]), str(moved[2]), str(displacement),
 		str(world.motion.field_build_usec), str(world.motion.field_sample_usec), str(world.motion.exact_sample_usec),
-		str(world.motion.field_agent_count), str(world.motion.exact_agent_count), str(world.motion.field_cell_visits), str(world.motion.exact_candidate_visits), str(world.motion.exact_neighbor_visits), str(world.motion.aggregate_agent_contributions)
+		str(world.motion.field_agent_count), str(world.motion.exact_agent_count), str(world.motion.field_cell_visits), str(world.motion.exact_candidate_visits), str(world.motion.exact_neighbor_visits), str(world.motion.aggregate_agent_contributions), str(world.interaction.grass_consumed), str(world.grid.cell_map.storage_count), str(world.motion._crowd_field.cell_map.storage_count)
 	])
 
 func _run_threat_scan() -> void:

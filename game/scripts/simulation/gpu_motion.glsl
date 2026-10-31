@@ -25,11 +25,13 @@ struct Result {
 layout(set = 0, binding = 0, std430) readonly buffer Actors { Actor actors[]; };
 layout(set = 0, binding = 1, std430) readonly buffer Cells { Cell cells[]; };
 layout(set = 0, binding = 2, std430) writeonly buffer Results { Result results[]; };
+layout(set = 0, binding = 5, std430) readonly buffer BlockLookup { int block_lookup[]; };
 layout(push_constant, std430) uniform Parameters {
     vec4 world_dt_count;
     vec4 grid_size_radius;
     vec4 acceleration_arrival_separation_facing;
     vec4 alignment_cohesion;
+    vec4 sparse_cells_blocks_mask;
 } parameters;
 
 const int SHEEP = 0;
@@ -79,6 +81,26 @@ vec2 pair_direction(int own_slot, int other_slot) {
     return vec2(cos(angle), sin(angle));
 }
 
+// SpatialCellMap uses occupied 4x4 blocks. Integer coordinate keys are not
+// actor identities. Missing blocks are empty; no neighbor list is truncated.
+int cell_slot(ivec2 coordinate, int columns) {
+    if (parameters.sparse_cells_blocks_mask.z == 0.0) return coordinate.y * columns + coordinate.x;
+    const int BLOCK_WIDTH = 4;
+    int key = (coordinate.y / BLOCK_WIDTH) * int(parameters.sparse_cells_blocks_mask.y) + coordinate.x / BLOCK_WIDTH;
+    uint mask = uint(parameters.sparse_cells_blocks_mask.w);
+    uint bucket = (uint(key) * 73856093u) & mask;
+    for (uint probe = 0u; probe <= mask; ++probe) {
+        int stored_key = block_lookup[bucket * 2u];
+        if (stored_key < 0) return -1;
+        if (stored_key == key) {
+            int block = block_lookup[bucket * 2u + 1u];
+            return block * 16 + (coordinate.y % BLOCK_WIDTH) * BLOCK_WIDTH + coordinate.x % BLOCK_WIDTH;
+        }
+        bucket = (bucket + 1u) & mask;
+    }
+    return -1;
+}
+
 vec2 steering(uint index, out vec4 counters) {
     Actor actor = actors[index];
     vec2 position = actor.position_velocity.xy;
@@ -98,8 +120,10 @@ vec2 steering(uint index, out vec4 counters) {
     counters = vec4(0.0);
     for (int y = low.y; y <= high.y; ++y) {
         for (int x = low.x; x <= high.x; ++x) {
-            Cell cell = cells[y * dimensions.x + x];
+            int slot = cell_slot(ivec2(x, y), dimensions.x);
             counters.w += 1.0;
+            if (slot < 0) continue;
+            Cell cell = cells[slot];
             if (dense_sample) {
                 float count = cell.position_radius_count.w;
                 if (count == 0.0) continue;

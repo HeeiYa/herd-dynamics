@@ -48,7 +48,7 @@ func setup(store: AgentStore, grid: SpatialGrid, intents: IntentBuffer, config: 
 	_grid = grid
 	_intents = intents
 	_config = config
-	_crowd_field = CrowdMotionField.new(config.world_size, config.crowd_cell_size)
+	_crowd_field = CrowdMotionField.new(config.world_size, config.crowd_cell_size, config.use_sparse_spatial())
 
 func step(tick: int, dt: float) -> void:
 	_prepare_step()

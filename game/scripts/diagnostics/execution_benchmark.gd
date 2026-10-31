@@ -41,6 +41,10 @@ func _run() -> void:
 	scenario.wolf_count = int(_options.get("wolves", "12"))
 	scenario.dog_count = int(_options.get("dogs", "8"))
 	var config := SimulationConfig.new()
+	if not PastureBenchmarkOptions.apply_to(config, _options):
+		push_error("Invalid pasture benchmark options")
+		get_tree().quit(1)
+		return
 	config.motion_backend = SimulationConfig.MotionBackend.GPU
 	config.instrument_enabled = _options.get("instrument", "0") == "1"
 	config.ai_budget_usec = int(_options.get("ai-budget-usec", "2000"))
@@ -133,6 +137,7 @@ func _run() -> void:
 	_pulse_mutex.unlock()
 	_pulse_thread.wait_to_finish()
 	var summary: Dictionary = {
+		"pasture": PastureBenchmarkOptions.describe(_access.config),
 		"mode": "worker" if worker else "inline", "engine": Engine.get_version_info(),
 		"debug_build": OS.is_debug_build(), "processor": OS.get_processor_name(),
 		"gpu": RenderingServer.get_video_adapter_name(), "rendering_method": RenderingServer.get_current_rendering_method(),
@@ -160,7 +165,7 @@ func _run() -> void:
 		"limitations": "10ms independent deferred pulses measure main-loop dispatch, not hardware input latency. Per-step quality scans and in-memory CSV collection are included in workload. CSV files are written after sampling; optional observer logs are written during sampling. Worker snapshots add their own cost. Wall-budget AI is not deterministic."
 	}
 	_write_csv(output.path_join("frames.csv"), "elapsed_us,tick,frame_ms,frontend_cpu_ms,snapshot_age_ms,backlog_seconds,visible,epoch,population,render_build_us,sort_us,published_steps,gpu_render_ms,visual_publish_us,body_prepare_us,shadows_us,body_submit_us,observer_update_us,hud_refresh_us", _frames)
-	_write_csv(output.path_join("steps.csv"), "tick,step_us,snapshot_us,ai_used_us,active,missing_intents,max_perception_delay_ticks,max_decision_delay_ticks,motion_us,epoch,commands_us,coordination_us,grid_us,interaction_us", _steps)
+	_write_csv(output.path_join("steps.csv"), "tick,step_us,snapshot_us,ai_used_us,active,missing_intents,max_perception_delay_ticks,max_decision_delay_ticks,motion_us,epoch,commands_us,coordination_us,grid_us,interaction_us,grass_food,perception_cells,motion_cells", _steps)
 	_write_csv(output.path_join("pulses.csv"), "sent_us,received_us,dispatch_ms", _pulses)
 	_write_csv(output.path_join("receipts.csv"), "request_id,submitted_us,completed_us,displayed_us,accepted,reason", _receipts)
 	_write_csv(output.path_join("faults.csv"), "submitted_us,inline_finished_us,duration_ms,busy", _faults)
@@ -213,7 +218,7 @@ func _inject_fault(worker: bool, milliseconds: int, busy: bool) -> void:
 
 func _on_publication(snapshot: SimulationPublication) -> void:
 	if _sampling and snapshot.step_usec > 0:
-		_steps.append(PackedStringArray([str(snapshot.tick), str(snapshot.step_usec), str(snapshot.snapshot_usec), str(snapshot.ai_used_usec), str(snapshot.active_agents), str(snapshot.missing_intents), str(snapshot.max_perception_delay_ticks), str(snapshot.max_decision_delay_ticks), str(snapshot.phase_usec[4]), str(snapshot.store.epoch), str(snapshot.phase_usec[0]), str(snapshot.phase_usec[1]), str(snapshot.phase_usec[2]), str(snapshot.phase_usec[5])]))
+		_steps.append(PackedStringArray([str(snapshot.tick), str(snapshot.step_usec), str(snapshot.snapshot_usec), str(snapshot.ai_used_usec), str(snapshot.active_agents), str(snapshot.missing_intents), str(snapshot.max_perception_delay_ticks), str(snapshot.max_decision_delay_ticks), str(snapshot.phase_usec[4]), str(snapshot.store.epoch), str(snapshot.phase_usec[0]), str(snapshot.phase_usec[1]), str(snapshot.phase_usec[2]), str(snapshot.phase_usec[5]), str(snapshot.grass_consumed), str(snapshot.perception_cells), str(snapshot.motion_cells)]))
 
 func _on_inline_step(elapsed_usec: int) -> void:
 	if not _sampling:
@@ -226,7 +231,7 @@ func _on_inline_step(elapsed_usec: int) -> void:
 		if world.store.is_active(handle):
 			active += 1
 			missing += int(world.intents.get_intent(handle, world.tick) == null)
-	_steps.append(PackedStringArray([str(world.tick), str(elapsed_usec), "0", str(world.ai.frame_used_usec), str(active), str(missing), str(world.ai.max_perception_delay_ticks), str(world.ai.max_decision_delay_ticks), str(world.phase_usec[4]), str(world.store.epoch), str(world.phase_usec[0]), str(world.phase_usec[1]), str(world.phase_usec[2]), str(world.phase_usec[5])]))
+	_steps.append(PackedStringArray([str(world.tick), str(elapsed_usec), "0", str(world.ai.frame_used_usec), str(active), str(missing), str(world.ai.max_perception_delay_ticks), str(world.ai.max_decision_delay_ticks), str(world.phase_usec[4]), str(world.store.epoch), str(world.phase_usec[0]), str(world.phase_usec[1]), str(world.phase_usec[2]), str(world.phase_usec[5]), str(world.interaction.grass_consumed), str(world.grid.cell_map.storage_count), str(world.motion._crowd_field.cell_map.storage_count)]))
 
 func _regenerate(sheep_count: int) -> void:
 	_regeneration_count = sheep_count + int(_main.hud.wolves.value) + int(_main.hud.dogs.value)

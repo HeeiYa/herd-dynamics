@@ -53,14 +53,17 @@ func _submit_control(kind: SimulationCommand.Kind, integer: int = 0, scalar: flo
 	command.kind = kind
 	command.integer = integer
 	command.scalar = scalar
-	command.scenario = scenario.duplicate() as ScenarioConfig if scenario != null else null
+	command.scenario = scenario.duplicate(true) as ScenarioConfig if scenario != null else null
 	return access.submit(command)
 
-func request_reset(scenario: ScenarioConfig) -> void:
+func request_reset(scenario: ScenarioConfig) -> bool:
+	var owned: ScenarioConfig = scenario.validated_copy() if scenario != null else null
+	if owned == null:
+		return false
 	if access != null:
-		_submit_control(SimulationCommand.Kind.RESET, 0, 0.0, scenario)
-		return
-	_pending_reset = scenario.duplicate() as ScenarioConfig
+		return _submit_control(SimulationCommand.Kind.RESET, 0, 0.0, owned)
+	_pending_reset = owned
+	return true
 
 func request_pause(value: bool) -> void:
 	if access != null:
@@ -113,6 +116,7 @@ func _process(_delta: float) -> void:
 		elapsed = 0.0
 	if _pending_reset != null:
 		world.reset(_pending_reset)
+		presentation.bind_world(world)
 		presentation.set_seed(world.scenario.random_seed)
 		_pending_reset = null
 		accumulator_seconds = 0.0

@@ -26,6 +26,9 @@ var motion_backend_status: String = "initializing"
 var planner_description: String = "正在生成"
 var missing_intents: int = 0
 var active_agents: int = 0
+var grass_consumed: float = 0.0
+var perception_cells: int = 0
+var motion_cells: int = 0
 var paused: bool = false
 var speed: float = 1.0
 var backlog_seconds: float = 0.0
@@ -44,7 +47,7 @@ static func capture(world: SimulationWorld, selected: AgentHandle) -> Simulation
 	result.intents = world.intents.publication_copy()
 	result.config = world.config.duplicate() as SimulationConfig
 	result.settings = world.ai.settings.duplicate() as AISettings
-	result.scenario = world.scenario.duplicate() as ScenarioConfig
+	result.scenario = world.scenario.duplicate(true) as ScenarioConfig
 	result.resources = world.resources.publication_copy(result.config)
 	result.inspection = AgentInspection.capture(world, selected)
 	result.counts = world.counts()
@@ -60,6 +63,9 @@ static func capture(world: SimulationWorld, selected: AgentHandle) -> Simulation
 	result.grid_candidate_count = world.grid.candidate_count
 	result.motion_backend_status = world.motion.backend_status
 	result.planner_description = world.spawn_planner.describe() if world.spawn_planner != null else "V1 固定算法"
+	result.grass_consumed = world.interaction.grass_consumed
+	result.perception_cells = world.grid.cell_map.storage_count
+	result.motion_cells = world.motion._crowd_field.cell_map.storage_count
 	result.ai_used_usec = world.ai.frame_used_usec
 	for dense: int in world.store.count:
 		if not world.store.is_active(world.store.handle_at(dense)):

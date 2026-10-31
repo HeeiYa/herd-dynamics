@@ -38,6 +38,10 @@ func _initialize() -> void:
 	if has_meta("initial_config"):
 		simulation_config = get_meta("initial_config") as SimulationConfig
 	for argument: String in OS.get_cmdline_user_args():
+		if argument == "--spatial=dense":
+			simulation_config.spatial_backend = SimulationConfig.SpatialBackend.DENSE
+		elif argument == "--spatial=sparse":
+			simulation_config.spatial_backend = SimulationConfig.SpatialBackend.SPARSE
 		if argument == "--motion-backend=cpu":
 			simulation_config.motion_backend = SimulationConfig.MotionBackend.CPU
 		elif argument == "--gpu-bulk=0":

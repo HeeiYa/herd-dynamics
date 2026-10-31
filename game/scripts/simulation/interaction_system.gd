@@ -41,7 +41,10 @@ func step(tick: int, dt: float) -> void:
 func _increase_hunger(dt: float) -> void:
 	for dense: int in range(_store.count):
 		if _store.alive[dense] != 0:
-			_store.hunger[dense] = clampf(_store.hunger[dense] + _config.hunger_rate * dt, 0.0, 1.0)
+			var rate: float = _config.hunger_rate
+			if _store.species[dense] == SimTypes.Species.SHEEP:
+				rate = _config.sheep_metabolism / _config.sheep_stomach_capacity
+			_store.hunger[dense] = clampf(_store.hunger[dense] + rate * dt, 0.0, 1.0)
 
 func _accept_intents(tick: int) -> void:
 	for dense: int in range(_store.count):
@@ -174,7 +177,7 @@ func _graze(tick: int, dt: float) -> void:
 		if cell < 0:
 			continue
 		var share: float = _agent_demand[dense] / _cell_demand[cell] * _cell_consumed[cell]
-		_store.hunger[dense] = clampf(_store.hunger[dense] - share, 0.0, 1.0)
+		_store.hunger[dense] = clampf(_store.hunger[dense] - share / _config.sheep_stomach_capacity, 0.0, 1.0)
 
 func _collect_grazing_demand(dense: int, tick: int, dt: float) -> void:
 	if _store.alive[dense] == 0 or _store.held[dense] != 0 or _store.species[dense] != SimTypes.Species.SHEEP:
@@ -187,7 +190,7 @@ func _collect_grazing_demand(dense: int, tick: int, dt: float) -> void:
 		return
 	if not _resources.can_graze_at(cell, _store.position_next[dense]):
 		return
-	var requested: float = minf(_store.hunger[dense], maxf(0.0, _config.grazing_rate * dt))
+	var requested: float = minf(_store.hunger[dense] * _config.sheep_stomach_capacity, maxf(0.0, _config.grazing_rate * dt))
 	if requested <= 0.0:
 		return
 	if _cell_demand[cell] == 0.0:

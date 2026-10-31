@@ -20,7 +20,14 @@ class Fixture extends RefCounted:
 	var scalar_gpu := MotionSystem.new()
 	var grid: SpatialGrid
 
-	func _init() -> void:
+	func _init(sparse: bool = false) -> void:
+		config.spatial_backend = SimulationConfig.SpatialBackend.DENSE
+		gpu_config.spatial_backend = SimulationConfig.SpatialBackend.SPARSE if sparse else SimulationConfig.SpatialBackend.DENSE
+		scalar_config.spatial_backend = gpu_config.spatial_backend
+		if sparse:
+			config.world_size = Vector2(6400, 4000)
+			gpu_config.world_size = config.world_size
+			scalar_config.world_size = config.world_size
 		grid = SpatialGrid.new(config.world_size, config.cell_size)
 		gpu_config.motion_backend = SimulationConfig.MotionBackend.GPU
 		scalar_config.motion_backend = SimulationConfig.MotionBackend.GPU
@@ -137,6 +144,7 @@ func _run() -> void:
 	_compare(overlap, 0)
 	overlap.close()
 	_test_capacity_and_cache()
+	_test_sparse_projection()
 	for population: int in [1000, 3000, 5000]:
 		for layout: String in ["sparse", "dense"]:
 			var fixture := Fixture.new()
@@ -220,3 +228,24 @@ func _measure(fixture: Fixture, population: int, layout: String) -> void:
 		"cpu_mean_us": float(cpu_us) / REPETITIONS, "gpu_chain_mean_us": float(gpu_us) / REPETITIONS,
 		"scalar_gpu_chain_mean_us": float(scalar_us) / REPETITIONS,
 		"gpu_breakdown": fixture.gpu.backend_metrics(), "scalar_breakdown": fixture.scalar_gpu.backend_metrics()})
+
+func _test_sparse_projection() -> void:
+	_layout = "occupied-block projection and growth"
+	var fixture := Fixture.new(true)
+	fixture.populate(600, "dense")
+	for dense: int in fixture.store.count:
+		fixture.store.set_held(fixture.store.handle_at(dense), true)
+	_compare(fixture, 0)
+	for dense: int in fixture.store.count:
+		fixture.store.set_held(fixture.store.handle_at(dense), false)
+	_compare(fixture, 0)
+	# The same actor capacity now occupies many more blocks: GPU allocation must
+	# track cell/lookup capacity independently of the unchanged actor count.
+	for dense: int in fixture.store.count:
+		var position := Vector2(13 + (dense % 60) * 103, 13 + (dense / 60) * 390)
+		fixture.store.relocate(fixture.store.handle_at(dense), position)
+	_compare(fixture, 1)
+	for dense: int in fixture.store.count:
+		fixture.store.relocate(fixture.store.handle_at(dense), Vector2(6387, 3987))
+	_compare(fixture, 2)
+	fixture.close()

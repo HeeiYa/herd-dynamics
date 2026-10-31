@@ -44,9 +44,17 @@ fact = 13
 custom_name = "graze_grass"
 script = ExtResource("graze_grass")
 
+[sub_resource type="BTAction" id="food_exploration"]
+custom_name = "search_area"
+script = ExtResource("search_area")
+
+[sub_resource type="BTDynamicSelector" id="food_choice"]
+custom_name = "Eat local grass or explore until food is found"
+children = [SubResource("action_2_0"), SubResource("food_exploration")]
+
 [sub_resource type="BTDynamicSequence" id="branch_2"]
 custom_name = "Committed feeding before ordinary regroup"
-children = [SubResource("condition_2"), SubResource("action_2_0")]
+children = [SubResource("condition_2"), SubResource("food_choice")]
 
 [sub_resource type="BTCondition" id="condition_3"]
 custom_name = "Separated from local flock with hysteresis"

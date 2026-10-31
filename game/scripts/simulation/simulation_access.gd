@@ -73,9 +73,11 @@ static func threaded(config: SimulationConfig, scenario: ScenarioConfig) -> Simu
 	access.publication.store.epoch = 2
 	access.publication.intents = IntentBuffer.new()
 	access.publication.config = config.duplicate() as SimulationConfig
+	if scenario.pasture != null:
+		scenario.pasture.apply_to(access.publication.config)
 	access.publication.settings = AISettings.new()
-	access.publication.scenario = scenario.duplicate() as ScenarioConfig
-	access.publication.resources = ResourceGrid.new(config)
+	access.publication.scenario = scenario.duplicate(true) as ScenarioConfig
+	access.publication.resources = ResourceGrid.new(access.publication.config)
 	access.publication.phase_usec.resize(7)
 	access.probes = Probes.new(config.instrument_enabled)
 	access.tuning = TuningCatalog.new(access.config, access.settings)
@@ -166,7 +168,7 @@ func _valid_command(command: SimulationCommand) -> bool:
 		return false
 	match command.kind:
 		SimulationCommand.Kind.RESET:
-			return command.scenario != null and command.scenario.sheep_count >= 0 and command.scenario.wolf_count >= 0 and command.scenario.dog_count >= 0
+			return command.scenario != null and command.scenario.validated_copy() != null
 		SimulationCommand.Kind.SPEED:
 			return is_finite(command.scalar) and command.scalar > 0.0
 		SimulationCommand.Kind.SPAWN:

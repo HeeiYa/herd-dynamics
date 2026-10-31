@@ -103,7 +103,7 @@ func setup(store: AgentStore, intents: IntentBuffer, resources: ResourceGrid, co
 	_catalog.load_assets()
 	_ground = GroundLayer.new()
 	_ground.z_index = -3
-	_ground.configure(_resources, _config.world_size, load("res://assets/grass_tile.png") as Texture2D)
+	_ground.configure(_resources, _config.world_size)
 	add_child(_ground)
 	_create_shadows()
 	_selection = SelectionOverlay.new()
@@ -113,8 +113,6 @@ func setup(store: AgentStore, intents: IntentBuffer, resources: ResourceGrid, co
 
 func set_seed(random_seed: int) -> void:
 	_seed = random_seed
-	if _ground != null:
-		_ground.set_decoration_seed(random_seed)
 
 ## Adopt owned read-only data on the main thread; art and draw buffers stay local.
 func bind_publication(access: SimulationAccess) -> void:
@@ -122,7 +120,7 @@ func bind_publication(access: SimulationAccess) -> void:
 	_intents = access.intents
 	_resources = access.resources
 	_config = access.config
-	_ground.bind_resources(_resources)
+	_ground.bind_resources(_resources, _config.world_size)
 	if _seed != access.scenario.random_seed:
 		set_seed(access.scenario.random_seed)
 
@@ -472,3 +470,9 @@ func _append_captures(display_tick: float, visible_world: Rect2) -> void:
 		if visual.drawing.area.intersects(visible_world):
 			_queue_drawing(visual.drawing)
 			capture_visible_count += 1
+
+## Inline reset adopts resized resources before observing the new epoch.
+func bind_world(world: SimulationWorld) -> void:
+	_resources = world.resources
+	_config = world.config
+	_ground.bind_resources(_resources, _config.world_size)

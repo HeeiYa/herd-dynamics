@@ -51,6 +51,8 @@ var _pack_pipeline: RID
 var _pack_uniform_set: RID
 var _buffers: Array[RID] = []
 var _capacity: int = 0
+var _cell_capacity_bytes: int = 0
+var _lookup_capacity_bytes: int = 0
 var _actors := PackedFloat32Array()
 var _parameters := PackedFloat32Array()
 var _intent_records := PackedVector4Array()
@@ -99,18 +101,27 @@ func initialize() -> bool:
 		return false
 	return true
 
-func _ensure_capacity(count: int, cell_bytes: int) -> void:
-	if count <= _capacity:
+func _ensure_capacity(count: int, cell_bytes: int, lookup_bytes: int) -> void:
+	# An all-held sparse world has no occupied cells but still dispatches actors.
+	# Bound storage remains non-empty even when this step has nothing to upload.
+	cell_bytes = maxi(48, cell_bytes)
+	if count <= _capacity and cell_bytes <= _cell_capacity_bytes and lookup_bytes <= _lookup_capacity_bytes:
 		return
 	_release_buffers()
-	_capacity = maxi(128, maxi(count, _capacity * 2))
+	if count > _capacity:
+		_capacity = maxi(128, maxi(count, _capacity * 2))
+	if cell_bytes > _cell_capacity_bytes:
+		_cell_capacity_bytes = maxi(48, maxi(cell_bytes, _cell_capacity_bytes * 2))
+	if lookup_bytes > _lookup_capacity_bytes:
+		_lookup_capacity_bytes = maxi(16, maxi(lookup_bytes, _lookup_capacity_bytes * 2))
 	_actors.resize(_capacity * ACTOR_FLOATS)
 	_buffers = [
 		_device.storage_buffer_create(_capacity * ACTOR_FLOATS * BYTES_PER_FLOAT),
-		_device.storage_buffer_create(cell_bytes),
+		_device.storage_buffer_create(_cell_capacity_bytes),
 		_device.storage_buffer_create(_capacity * RESULT_FLOATS * BYTES_PER_FLOAT),
 		_device.storage_buffer_create(_capacity * ACTOR_FLOATS * BYTES_PER_FLOAT),
-		_device.storage_buffer_create(cell_bytes),
+		_device.storage_buffer_create(_cell_capacity_bytes),
+		_device.storage_buffer_create(_lookup_capacity_bytes),
 	]
 	var uniforms: Array[RDUniform] = []
 	var pack_uniforms: Array[RDUniform] = []
@@ -119,9 +130,9 @@ func _ensure_capacity(count: int, cell_bytes: int) -> void:
 		uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 		uniform.binding = binding
 		uniform.add_id(_buffers[binding])
-		if binding < 3:
+		if binding < 3 or binding == 5:
 			uniforms.append(uniform)
-		if binding != 2:
+		if binding in [0, 1, 3, 4]:
 			pack_uniforms.append(uniform)
 	_uniform_set = _device.uniform_set_create(uniforms, _shader, 0)
 	_pack_uniform_set = _device.uniform_set_create(pack_uniforms, _pack_shader, 0)
@@ -132,7 +143,10 @@ func run(store: AgentStore, intents: IntentBuffer, field: CrowdMotionField, conf
 	assert(store.capacity < 16777216)
 	var revision: int = store.life_revision
 	var started: int = Time.get_ticks_usec()
-	_ensure_capacity(store.capacity, field.columns * field.rows * CrowdMotionField.GPU_CELL_FLOATS * BYTES_PER_FLOAT)
+	var lookup: PackedInt32Array = field.cell_map.gpu_lookup()
+	var lookup_bytes: PackedByteArray = lookup.to_byte_array()
+	var cell_count: int = field.cell_map.storage_count
+	_ensure_capacity(store.capacity, cell_count * CrowdMotionField.GPU_CELL_FLOATS * BYTES_PER_FLOAT, lookup_bytes.size())
 	_bulk_upload = config.gpu_bulk_upload
 	var actor_bytes: PackedByteArray
 	var cell_bytes: PackedByteArray
@@ -151,13 +165,16 @@ func run(store: AgentStore, intents: IntentBuffer, field: CrowdMotionField, conf
 		field.columns, field.rows, field.cell_size, config.neighbor_radius,
 		config.acceleration, config.arrival_radius, config.separation_strength, config.facing_min_speed,
 		config.alignment_weight, config.cohesion_weight, float(_bulk_upload), store.capacity,
+		cell_count, field.cell_map.block_columns, float(field.cell_map.sparse), lookup.size() / 2 - 1,
 	])
 	var parameter_bytes: PackedByteArray = _parameters.to_byte_array()
 	pack_usec += Time.get_ticks_usec() - started
 	started = Time.get_ticks_usec()
 	_device.buffer_update(_buffers[3 if _bulk_upload else 0], 0, actor_upload_size, actor_bytes)
-	_device.buffer_update(_buffers[4 if _bulk_upload else 1], 0, cell_bytes.size(), cell_bytes)
-	uploaded_bytes += actor_upload_size + cell_bytes.size()
+	if not cell_bytes.is_empty():
+		_device.buffer_update(_buffers[4 if _bulk_upload else 1], 0, cell_bytes.size(), cell_bytes)
+	_device.buffer_update(_buffers[5], 0, lookup_bytes.size(), lookup_bytes)
+	uploaded_bytes += actor_upload_size + cell_bytes.size() + lookup_bytes.size()
 	upload_usec += Time.get_ticks_usec() - started
 	started = Time.get_ticks_usec()
 	_device.capture_timestamp("motion_begin")
@@ -166,7 +183,7 @@ func run(store: AgentStore, intents: IntentBuffer, field: CrowdMotionField, conf
 		_device.compute_list_bind_compute_pipeline(compute_list, _pack_pipeline)
 		_device.compute_list_bind_uniform_set(compute_list, _pack_uniform_set, 0)
 		_device.compute_list_set_push_constant(compute_list, parameter_bytes, parameter_bytes.size())
-		var pack_items: int = maxi(store.count, field.columns * field.rows)
+		var pack_items: int = maxi(store.count, cell_count)
 		_device.compute_list_dispatch(compute_list, ceili(float(pack_items) / 64.0), 1, 1)
 		_device.compute_list_add_barrier(compute_list)
 	_device.compute_list_bind_compute_pipeline(compute_list, _pipeline)
@@ -361,5 +378,7 @@ func close() -> void:
 	_device.free()
 	_device = null
 	_capacity = 0
+	_cell_capacity_bytes = 0
+	_lookup_capacity_bytes = 0
 	_cached_life_revision = -1
 	_cached_epoch = -1

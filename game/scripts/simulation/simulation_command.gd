@@ -34,6 +34,6 @@ func owned_copy() -> SimulationCommand:
 	copy.integer = integer
 	copy.scalar = scalar
 	copy.submitted_usec = submitted_usec
-	copy.scenario = scenario.duplicate() as ScenarioConfig if scenario != null else null
+	copy.scenario = scenario.duplicate(true) as ScenarioConfig if scenario != null else null
 	copy.tuning = TuningCatalog.Change.new(tuning.key, tuning.value) if tuning != null else null
 	return copy

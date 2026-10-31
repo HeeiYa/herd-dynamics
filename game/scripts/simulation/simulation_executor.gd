@@ -29,7 +29,7 @@ func start(config: SimulationConfig, scenario: ScenarioConfig) -> Error:
 	_config = config.duplicate() as SimulationConfig
 	_config.detached_ai = true
 	_config.ai_budget_usec = _config.worker_ai_budget_usec
-	_initial = scenario.duplicate() as ScenarioConfig
+	_initial = scenario.duplicate(true) as ScenarioConfig
 	return _thread.start(_run)
 
 func enqueue(command: SimulationCommand) -> bool:

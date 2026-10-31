@@ -17,6 +17,16 @@ enum Param {
 	COHESION_WEIGHT,
 	DOG_PROTECTION_RADIUS,
 	DOG_LEASH_RADIUS,
+	WORLD_WIDTH,
+	WORLD_HEIGHT,
+	GRASS_CELL_SIZE,
+	INITIAL_GRASS,
+	GRASS_CAPACITY,
+	GRASS_RECOVERY,
+	GRAZING_SPEED,
+	SHEEP_METABOLISM,
+	STOMACH_CAPACITY,
+	FORAGE_RINGS,
 }
 
 class Parameter extends RefCounted:
@@ -30,6 +40,7 @@ class Parameter extends RefCounted:
 	var step: float
 	var default_value: float
 	var value: float
+	var requires_reset: bool = false
 
 class Change extends RefCounted:
 	var key: Param
@@ -76,6 +87,19 @@ func _init(config: SimulationConfig, settings: AISettings) -> void:
 	_add(Param.COHESION_WEIGHT, "群聚强度", "羊", "", "走动的羊向邻近同伴靠拢的权重。", 0.0, 0.6, 0.02, _config.cohesion_weight)
 	_add(Param.DOG_PROTECTION_RADIUS, "犬保护范围", "物种：牧羊犬", "px", "狼进入羊群该半径内时，犬视为威胁。", 100.0, 320.0, 10.0, _settings.protection_radius)
 	_add(Param.DOG_LEASH_RADIUS, "犬追击范围", "物种：牧羊犬", "px", "拦截时离开羊群锚点的最远距离。", 120.0, 420.0, 10.0, _config.dog_leash_radius)
+
+	_add(Param.WORLD_WIDTH, "场地宽度", "重新生成生效", "px", "改变世界范围，不改变动物体型或感知距离。", 320.0, 6400.0, 20.0, _config.world_size.x)
+	_add(Param.WORLD_HEIGHT, "场地高度", "重新生成生效", "px", "与宽度一起应用，镜头和出生位置同时重建。", 240.0, 4000.0, 20.0, _config.world_size.y)
+	_add(Param.GRASS_CELL_SIZE, "草地格宽", "重新生成生效", "px", "改变草斑尺度；同一片土地的总食物容量保持。", 40.0, 160.0, 20.0, _config.resource_cell_size)
+	_add(Param.INITIAL_GRASS, "初始草覆盖", "重新生成生效", "%", "新场地每格已有的草量占满草的比例。", 0.0, 1.0, 0.025, _config.initial_grass_coverage)
+	_add(Param.GRASS_CAPACITY, "草地丰富度", "重新生成生效", "食物/标准格", "每80×80面积满草的储量，边缘按实际面积计算。", 0.05, 8.0, 0.05, _config.grass_capacity)
+	_add(Param.GRASS_RECOVERY, "草恢复速度", "生态", "%/s", "每模拟秒恢复的覆盖比例；0为不恢复，暂停冻结。", 0.0, 0.2, 0.005, _config.grass_recovery_rate)
+	_add(Param.GRAZING_SPEED, "羊吃草速度", "物种：羊", "食物/s", "单羊每模拟秒最多吃到的食物；多人同格按需求分配。", 0.0, 1.0, 0.01, _config.grazing_rate)
+	_add(Param.SHEEP_METABOLISM, "羊饥饿速度", "物种：羊", "食物/s", "每模拟秒消耗的储备，只影响羊。", 0.0, 0.15, 0.005, _config.sheep_metabolism)
+	_add(Param.STOMACH_CAPACITY, "羊胃容量", "物种：羊", "食物", "增大不赠送食物；缩小时超出容量的储备被裁去。", 0.1, 5.0, 0.1, _config.sheep_stomach_capacity)
+	_add(Param.FORAGE_RINGS, "觅食范围", "物种：羊", "格", "在周围若干圈草格中选食物；不改变动物感知半径。", 1.0, 4.0, 1.0, _config.forage_cell_radius)
+	for key: int in range(Param.WORLD_WIDTH, Param.GRASS_CAPACITY + 1):
+		parameters[key].requires_reset = true
 
 func _add(key: Param, label: String, scope: String, unit: String, description: String, minimum: float, maximum: float, step: float, default_value: float) -> void:
 	var parameter := Parameter.new()
@@ -126,6 +150,8 @@ func validated_copy(change: Change) -> Change:
 	if change == null or change.key < 0 or change.key >= parameters.size() or not is_finite(change.value):
 		return null
 	var parameter: Parameter = parameters[change.key]
+	if parameter.requires_reset:
+		return null
 	return Change.new(change.key, clampf(change.value, parameter.minimum, parameter.maximum))
 
 func snapshot() -> Dictionary:
@@ -149,11 +175,35 @@ func _write(key: Param, value: float) -> void:
 			_settings.protection_radius = value
 		Param.DOG_LEASH_RADIUS:
 			_config.dog_leash_radius = value
+		Param.GRASS_RECOVERY:
+			_config.grass_recovery_rate = value
+		Param.GRAZING_SPEED:
+			_config.grazing_rate = value
+		Param.SHEEP_METABOLISM:
+			_config.sheep_metabolism = value
+		Param.STOMACH_CAPACITY:
+			_config.sheep_stomach_capacity = value
+		Param.FORAGE_RINGS:
+			_config.forage_cell_radius = roundi(value)
 
 func format_value(key: Param, value: float) -> String:
 	var parameter: Parameter = parameters[key]
+	if key == Param.GRASS_RECOVERY:
+		return "不恢复" if value <= 0.0 else "%.1f%%/s · 满草 %.1fs" % [value * 100.0, 1.0 / value]
+	if parameter.unit == "%":
+		return "%.1f%%" % (value * 100.0)
+	if parameter.unit.begins_with("食物"):
+		return "%.3f %s" % [value, parameter.unit]
 	if parameter.unit == "×":
 		return "%.2f×" % value
 	if parameter.unit.is_empty():
 		return "%.2f" % value
 	return "%d %s" % [roundi(value), parameter.unit]
+
+## Reset synchronizes applied structural values without changing startup defaults.
+func sync_generation(config: SimulationConfig) -> void:
+	parameters[Param.WORLD_WIDTH].value = config.world_size.x
+	parameters[Param.WORLD_HEIGHT].value = config.world_size.y
+	parameters[Param.GRASS_CELL_SIZE].value = config.resource_cell_size
+	parameters[Param.INITIAL_GRASS].value = config.initial_grass_coverage
+	parameters[Param.GRASS_CAPACITY].value = config.grass_capacity
