@@ -145,6 +145,7 @@ func resume_agent(handle: AgentHandle, tick: int) -> void:
 	if context == null or not context.suspended:
 		return
 	context.suspended = false
+	context.awaiting_resume_perception = true
 	context.player.active = true
 	context.current_tick = tick
 	context.committed_target = null
@@ -153,7 +154,6 @@ func resume_agent(handle: AgentHandle, tick: int) -> void:
 	context.facts_dirty = true
 	context.task_name = &"Waiting for first perception"
 	_schedule_perception(context, tick)
-	_schedule_decision(context, tick + 1)
 
 func reset() -> void:
 	for slot: int in contexts:
@@ -276,6 +276,8 @@ func _enqueue_due(tick: int) -> void:
 		_decision_due.erase(tick)
 
 func _request_urgent(context: AgentContext, tick: int) -> void:
+	if context.awaiting_resume_perception:
+		return
 	if context.urgent_queued or context.suspended:
 		return
 	context.next_decision_tick = mini(context.next_decision_tick, tick)
@@ -301,6 +303,10 @@ func _run_perception(tick: int) -> bool:
 		var job_start: int = Time.get_ticks_usec() if probes.enabled else 0
 		var candidates_before: int = grid.candidate_count
 		perception.update(context, tick)
+		if context.awaiting_resume_perception:
+			context.awaiting_resume_perception = false
+			context.next_decision_tick = tick
+			_request_urgent(context, tick)
 		var publish_start: int = Time.get_ticks_usec() if probes.enabled else 0
 		knowledge.publish(context)
 		if probes.enabled:

@@ -111,7 +111,7 @@ func select(handle: AgentHandle) -> void:
 	_selected = handle
 	_view.set_selected(handle)
 	if handle != null:
-		if not hud.panel_open and hud.ui_visible:
+		if not hud.panel_open and hud.ui_visible and not _grab.is_busy():
 			hud.toggle_panel()
 		hud.tabs.current_tab = 0
 	refresh_panel()
@@ -166,7 +166,7 @@ func _process(delta: float) -> void:
 	if on_pasture and not _grab.is_busy() and _tool != Tool.PLACE:
 		_insight.hovered = _view.pick(world_point)
 	if _grab.state == GrabTool.State.CARRYING:
-		_grab.pointer_world = world_point
+		_grab.update_pointer(world_point)
 		_grab.pointer_valid = on_pasture and _is_inside_world(world_point)
 	_grab.update_state(_runner.paused)
 	_insight.refresh()
@@ -187,7 +187,7 @@ func _input(event: InputEvent) -> void:
 		_camera.end_drag()
 	elif button.button_index == MOUSE_BUTTON_LEFT and _grab.state == GrabTool.State.CARRYING:
 		_grab.pointer_valid = not _pointer_over_gui() and _is_inside_world(_camera.screen_to_world(button.position))
-		_grab.pointer_world = _camera.screen_to_world(button.position)
+		_grab.update_pointer(_camera.screen_to_world(button.position))
 		_grab.release()
 		get_viewport().set_input_as_handled()
 

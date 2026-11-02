@@ -60,6 +60,7 @@ var decision_ticket: int = 0
 # An observer intervention holds this life outside the pasture. While set, the
 # tree is inactive and no perception or decision job is scheduled.
 var suspended: bool = false
+var awaiting_resume_perception: bool = false
 var current_tick: int = 0
 var last_decision_tick: int = 0
 var last_perception_tick: int = -1
@@ -154,4 +155,5 @@ func clear_runtime() -> void:
 	decision_queued = false
 	urgent_queued = false
 	suspended = false
+	awaiting_resume_perception = false
 	decision_ticket += 1

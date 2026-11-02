@@ -23,6 +23,7 @@ var paused: bool = false
 var _world: SimulationWorld
 var _view: WorldPresentation
 var _origin: Vector2 = Vector2.ZERO
+var _pointer_offset: Vector2 = Vector2.ZERO
 var _drop_position: Vector2 = Vector2.ZERO
 var _region: Array = []
 var _font: Font
@@ -44,12 +45,16 @@ func begin(target: AgentHandle, world_point: Vector2) -> bool:
 	handle = target
 	# Cancellation restores the authoritative origin, not an interpolated foot.
 	_origin = _world.store.position_current[_world.store.resolve(target)]
+	_pointer_offset = _origin - world_point
 	_region = _view.body_region(target)
-	pointer_world = world_point
+	pointer_world = _origin
 	pointer_valid = true
 	state = State.CARRYING
 	_world.queue_hold(target)
 	return true
+
+func update_pointer(world_point: Vector2) -> void:
+	pointer_world = world_point + _pointer_offset
 
 ## Left release. Invalid places return the body where it was picked up.
 func release() -> void:
