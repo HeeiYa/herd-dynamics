@@ -1,12 +1,11 @@
-[gd_scene format=3]
-
-[ext_resource type="Script" path="res://scripts/presentation/observer_hud.gd" id="script"]
+[gd_scene format=3 uid="uid://cuna6ub3fw7tf"]
 
 [ext_resource type="Theme" path="res://scenes/ui/observer_theme.tres" id="1_f532b"]
 [ext_resource type="PackedScene" path="res://scenes/ui/agent_inspector.tscn" id="2_j0o5f"]
 [ext_resource type="PackedScene" path="res://scenes/ui/tuning_panel.tscn" id="3_mmf4m"]
 [ext_resource type="PackedScene" path="res://scenes/ui/scenario_panel.tscn" id="4_cun1h"]
 [ext_resource type="PackedScene" path="res://scenes/ui/performance_card.tscn" id="5_2fac1"]
+[ext_resource type="Script" uid="uid://bymsl3hhoeico" path="res://scripts/presentation/observer_hud.gd" id="script"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_12l70"]
 content_margin_left = 12.0
@@ -63,69 +62,71 @@ shadow_color = Color(0.1, 0.08, 0.04, 0.22)
 shadow_size = 6
 shadow_offset = Vector2(0, 2)
 
-[node name="Hud" type="Control"]
-script = ExtResource("script")
+[node name="Hud" type="Control" unique_id=47481625]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 mouse_filter = 2
 theme = ExtResource("1_f532b")
+script = ExtResource("script")
 
-[node name="TopBar" type="PanelContainer" parent="."]
+[node name="TopBar" type="PanelContainer" parent="." unique_id=299151732]
 layout_mode = 0
 anchor_right = 1.0
 offset_bottom = 52.0
 theme_override_styles/panel = SubResource("StyleBoxFlat_12l70")
 
-[node name="Content" type="HBoxContainer" parent="TopBar"]
+[node name="Content" type="HBoxContainer" parent="TopBar" unique_id=2119532711]
 layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="Label18" type="Label" parent="TopBar/Content"]
+[node name="Label18" type="Label" parent="TopBar/Content" unique_id=963504763]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.32647058, 0.38823533, 0.19411767, 1)
 theme_override_font_sizes/font_size = 20
 text = "牧场观察室"
 
-[node name="SceneLabel" type="Label" parent="TopBar/Content"]
+[node name="SceneLabel" type="Label" parent="TopBar/Content" unique_id=1800719190]
 visible = false
 modulate = Color(0.47843137, 0.41568628, 0.33333334, 1)
 layout_mode = 2
 text = "自然牧场 · 种子 42"
 
-[node name="VSeparator20" type="VSeparator" parent="TopBar/Content"]
+[node name="VSeparator20" type="VSeparator" parent="TopBar/Content" unique_id=965112526]
 layout_mode = 2
 
-[node name="CountsLabel" type="Label" parent="TopBar/Content"]
+[node name="CountsLabel" type="Label" parent="TopBar/Content" unique_id=2117806640]
 layout_mode = 2
 text = "羊 0   狼 0   犬 0"
 
-[node name="Control22" type="Control" parent="TopBar/Content"]
+[node name="Control22" type="Control" parent="TopBar/Content" unique_id=1864990218]
 layout_mode = 2
 size_flags_horizontal = 3
 mouse_filter = 2
 
-[node name="TimeLabel" type="Label" parent="TopBar/Content"]
+[node name="TimeLabel" type="Label" parent="TopBar/Content" unique_id=1500161366]
 visible = false
 modulate = Color(0.47843137, 0.41568628, 0.33333334, 1)
 layout_mode = 2
 text = "运行 · 0.0s · 捕获 0 · 镜头 总览 0.75×"
 
-[node name="Pause" type="Button" parent="TopBar/Content"]
+[node name="Pause" type="Button" parent="TopBar/Content" unique_id=2117027731]
 custom_minimum_size = Vector2(64, 0)
 layout_mode = 2
 tooltip_text = "空格"
 focus_mode = 0
 text = "暂停"
 
-[node name="SingleStep" type="Button" parent="TopBar/Content"]
+[node name="SingleStep" type="Button" parent="TopBar/Content" unique_id=1845687455]
 layout_mode = 2
 tooltip_text = "N：推进一个固定模拟步"
 focus_mode = 0
 text = "单步"
 
-[node name="Speed" type="OptionButton" parent="TopBar/Content"]
+[node name="Speed" type="OptionButton" parent="TopBar/Content" unique_id=1512960340]
 layout_mode = 2
 tooltip_text = "时间倍率：模拟时钟相对现实时间的速度，不改变角色移动速度"
 focus_mode = 0
@@ -140,51 +141,51 @@ popup/item_2/id = 2
 popup/item_3/text = "2.0×"
 popup/item_3/id = 3
 
-[node name="Reset" type="Button" parent="TopBar/Content"]
+[node name="Reset" type="Button" parent="TopBar/Content" unique_id=1205516626]
 layout_mode = 2
 tooltip_text = "R：按“场景”页的初始条件重置"
 focus_mode = 0
 text = "重置"
 
-[node name="VSeparator38" type="VSeparator" parent="TopBar/Content"]
+[node name="VSeparator38" type="VSeparator" parent="TopBar/Content" unique_id=1422780267]
 layout_mode = 2
 
-[node name="Overview" type="Button" parent="TopBar/Content"]
+[node name="Overview" type="Button" parent="TopBar/Content" unique_id=527959393]
 layout_mode = 2
 tooltip_text = "Home：显示整个牧场"
 focus_mode = 0
 text = "总览"
 
-[node name="PanelToggle" type="Button" parent="TopBar/Content"]
+[node name="PanelToggle" type="Button" parent="TopBar/Content" unique_id=1332529781]
 layout_mode = 2
 tooltip_text = "收起/展开右侧面板 (P)"
 focus_mode = 0
 text = "面板 ◂"
 
-[node name="HideUI" type="Button" parent="TopBar/Content"]
+[node name="HideUI" type="Button" parent="TopBar/Content" unique_id=1556718988]
 layout_mode = 2
 tooltip_text = "H：隐藏全部界面，便于录制"
 focus_mode = 0
 text = "隐藏界面"
 
-[node name="Toolbar" type="PanelContainer" parent="."]
+[node name="Toolbar" type="PanelContainer" parent="." unique_id=811575725]
 layout_mode = 0
 offset_left = 10.0
 offset_top = 64.0
 offset_right = 10.0
 offset_bottom = 64.0
 
-[node name="Tools" type="VBoxContainer" parent="Toolbar"]
+[node name="Tools" type="VBoxContainer" parent="Toolbar" unique_id=1306926683]
 layout_mode = 2
 theme_override_constants/separation = 6
 
-[node name="Label44" type="Label" parent="Toolbar/Tools"]
+[node name="Label44" type="Label" parent="Toolbar/Tools" unique_id=1177320401]
 modulate = Color(0.47843137, 0.41568628, 0.33333334, 1)
 layout_mode = 2
 theme_override_font_sizes/font_size = 11
 text = "工具"
 
-[node name="SelectTool" type="Button" parent="Toolbar/Tools"]
+[node name="SelectTool" type="Button" parent="Toolbar/Tools" unique_id=1826504668]
 layout_mode = 2
 tooltip_text = "V：左键选择角色，查看解释"
 focus_mode = 0
@@ -192,21 +193,21 @@ toggle_mode = true
 button_pressed = true
 text = "选择"
 
-[node name="GrabTool" type="Button" parent="Toolbar/Tools"]
+[node name="GrabTool" type="Button" parent="Toolbar/Tools" unique_id=629836764]
 layout_mode = 2
 tooltip_text = "G：按住左键提起角色，松开放下；Esc/右键放回"
 focus_mode = 0
 toggle_mode = true
 text = "抓取"
 
-[node name="PlaceTool" type="Button" parent="Toolbar/Tools"]
+[node name="PlaceTool" type="Button" parent="Toolbar/Tools" unique_id=1236070301]
 layout_mode = 2
 tooltip_text = "B：左键在牧场放置一个新角色"
 focus_mode = 0
 toggle_mode = true
 text = "放置"
 
-[node name="PlaceOption" type="OptionButton" parent="Toolbar/Tools"]
+[node name="PlaceOption" type="OptionButton" parent="Toolbar/Tools" unique_id=129517558]
 layout_mode = 2
 tooltip_text = "放置的物种"
 focus_mode = 0
@@ -220,16 +221,16 @@ popup/item_1/id = 1
 popup/item_2/text = "牧羊犬"
 popup/item_2/id = 2
 
-[node name="HSeparator59" type="HSeparator" parent="Toolbar/Tools"]
+[node name="HSeparator59" type="HSeparator" parent="Toolbar/Tools" unique_id=924875504]
 layout_mode = 2
 
-[node name="Label60" type="Label" parent="Toolbar/Tools"]
+[node name="Label60" type="Label" parent="Toolbar/Tools" unique_id=1245000950]
 modulate = Color(0.47843137, 0.41568628, 0.33333334, 1)
 layout_mode = 2
 theme_override_font_sizes/font_size = 11
 text = "显示"
 
-[node name="OverlayDestination" type="Button" parent="Toolbar/Tools"]
+[node name="OverlayDestination" type="Button" parent="Toolbar/Tools" unique_id=1595454643]
 layout_mode = 2
 tooltip_text = "选中角色的行动目的地（黄色虚线与叉）"
 focus_mode = 0
@@ -237,7 +238,7 @@ toggle_mode = true
 button_pressed = true
 text = "目的"
 
-[node name="OverlayTarget" type="Button" parent="Toolbar/Tools"]
+[node name="OverlayTarget" type="Button" parent="Toolbar/Tools" unique_id=1908376776]
 layout_mode = 2
 tooltip_text = "AI 历史目标位置：实线为最近扫描看到，长虚线为记忆，短虚线为转告"
 focus_mode = 0
@@ -245,21 +246,21 @@ toggle_mode = true
 button_pressed = true
 text = "目标"
 
-[node name="OverlayPerception" type="Button" parent="Toolbar/Tools"]
+[node name="OverlayPerception" type="Button" parent="Toolbar/Tools" unique_id=1674882920]
 layout_mode = 2
 tooltip_text = "选中角色的 AI 感知半径（不是镜头视野）"
 focus_mode = 0
 toggle_mode = true
 text = "感知"
 
-[node name="OverlayProtection" type="Button" parent="Toolbar/Tools"]
+[node name="OverlayProtection" type="Button" parent="Toolbar/Tools" unique_id=512214074]
 layout_mode = 2
 tooltip_text = "选中牧羊犬的保护范围与追击范围"
 focus_mode = 0
 toggle_mode = true
 text = "保护"
 
-[node name="OverlayMarks" type="Button" parent="Toolbar/Tools"]
+[node name="OverlayMarks" type="Button" parent="Toolbar/Tools" unique_id=902294681]
 layout_mode = 2
 tooltip_text = "受惊、锁定、拦截、捕获等短暂状态标记"
 focus_mode = 0
@@ -267,7 +268,7 @@ toggle_mode = true
 button_pressed = true
 text = "事件"
 
-[node name="RightPanel" type="PanelContainer" parent="."]
+[node name="RightPanel" type="PanelContainer" parent="." unique_id=1598949525]
 visible = false
 layout_mode = 0
 anchor_left = 1.0
@@ -278,54 +279,37 @@ offset_top = 64.0
 offset_right = -10.0
 offset_bottom = -12.0
 
-[node name="Tabs" type="TabContainer" parent="RightPanel"]
+[node name="Tabs" type="TabContainer" parent="RightPanel" unique_id=1864110367]
 layout_mode = 2
 current_tab = 0
 
-[node name="角色" type="ScrollContainer" parent="RightPanel/Tabs"]
+[node name="角色" type="ScrollContainer" parent="RightPanel/Tabs" unique_id=2131558052]
 layout_mode = 2
 horizontal_scroll_mode = 0
 metadata/_tab_index = 0
 
-[node name="Inspector" type="VBoxContainer" parent="RightPanel/Tabs/角色" instance=ExtResource("2_j0o5f")]
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_constants/separation = 8
+[node name="Inspector" parent="RightPanel/Tabs/角色" unique_id=1270616422 instance=ExtResource("2_j0o5f")]
 
-[node name="参数" type="ScrollContainer" parent="RightPanel/Tabs"]
+[node name="参数" type="ScrollContainer" parent="RightPanel/Tabs" unique_id=1779036296]
 visible = false
 layout_mode = 2
 horizontal_scroll_mode = 0
 metadata/_tab_index = 1
 
-[node name="Tuning" type="VBoxContainer" parent="RightPanel/Tabs/参数" instance=ExtResource("3_mmf4m")]
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_constants/separation = 4
+[node name="Tuning" parent="RightPanel/Tabs/参数" unique_id=102754478 instance=ExtResource("3_mmf4m")]
 
-[node name="场景" type="ScrollContainer" parent="RightPanel/Tabs"]
+[node name="场景" type="ScrollContainer" parent="RightPanel/Tabs" unique_id=1456522092]
 visible = false
 layout_mode = 2
 horizontal_scroll_mode = 0
 metadata/_tab_index = 2
 
-[node name="Scenario" type="VBoxContainer" parent="RightPanel/Tabs/场景" instance=ExtResource("4_cun1h")]
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_constants/separation = 6
+[node name="Scenario" parent="RightPanel/Tabs/场景" unique_id=926209851 instance=ExtResource("4_cun1h")]
 
-[node name="PerfCard" type="PanelContainer" parent="." instance=ExtResource("5_2fac1")]
-layout_mode = 0
-anchor_top = 1.0
-anchor_bottom = 1.0
-offset_left = 10.0
-offset_top = -10.0
-offset_right = 10.0
-offset_bottom = -10.0
-grow_vertical = 0
+[node name="PerfCard" parent="." unique_id=1013887645 instance=ExtResource("5_2fac1")]
 theme_override_styles/panel = SubResource("StyleBoxFlat_8jghc")
 
-[node name="RestoreButton" type="Button" parent="."]
+[node name="RestoreButton" type="Button" parent="." unique_id=1963771444]
 visible = false
 modulate = Color(1, 1, 1, 0.55)
 layout_mode = 0
@@ -339,7 +323,7 @@ grow_horizontal = 0
 focus_mode = 0
 text = "显示界面 (H)"
 
-[node name="Toast" type="Label" parent="."]
+[node name="Toast" type="Label" parent="." unique_id=1832574998]
 visible = false
 layout_mode = 0
 anchor_left = 0.5
