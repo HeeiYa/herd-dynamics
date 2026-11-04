@@ -107,6 +107,8 @@ func _queue_target_invalidation() -> void:
 		_retired_target = intent.target
 		_invalidation_tick = _world.tick
 		var position: Vector2 = _world.store.position_current[_world.store.resolve(_retired_target)]
+		var retired_record: ProductionBehaviorTrace = _by_identity[_retired_target.key()]
+		_sample_sheep_terminal(retired_record, _world.tick, position, "before_protocol_removal")
 		_world.queue_remove(_retired_target)
 		_world.queue_place(SimTypes.Species.SHEEP, position)
 		_by_identity[_retired_target.key()].removed_by_protocol = true
@@ -140,11 +142,17 @@ func observe_step_start(world: SimulationWorld) -> void:
 			if record.alive:
 				record.alive = false
 				record.death_tick = world.tick
+				record.close_exposure(world.tick, "PROTOCOL_REMOVAL" if record.removed_by_protocol else "LIFECYCLE_REMOVAL")
 			continue
 		record.previous_position = world.store.position_current[dense]
+		record.previous_state_tick = world.tick
+		if record.species == SimTypes.Species.SHEEP:
+			record.previous_hunger = world.store.hunger[dense]
 		if world.tick >= THREAT_TICK and world.tick < CLEAR_THREATS_TICK:
 			_observe_exposure(record)
 	if world.tick == CLEAR_THREATS_TICK:
+		for record: ProductionBehaviorTrace in _records:
+			record.close_exposure(world.tick, "OBSERVATION_WINDOW_ENDED" if record.species == SimTypes.Species.WOLF else "THREATS_REMOVED")
 		_begin_recovery()
 	observer_usec += Time.get_ticks_usec() - started
 
@@ -189,7 +197,9 @@ func _observe_exposure(record: ProductionBehaviorTrace) -> void:
 			target = candidate
 			record.exposure_position = position
 	if target == null:
+		record.close_exposure(_world.tick, "LEFT_STIMULUS_RADIUS")
 		return
+	record.observe_exposure_tick(_world.tick, target)
 	# Keep the currently closest geometric stimulus for radial motion. The first
 	# eligibility timestamp remains fixed; shared knowledge may precede exposure.
 	record.exposure_target = target
@@ -242,9 +252,12 @@ func _observe_response(record: ProductionBehaviorTrace, tick: int, position: Vec
 			record.direct_tick = observation.last_direct_tick
 			record.direct_usec = Time.get_ticks_usec() - _started_usec
 	var intent: MotionIntent = _world.intents.get_intent(record.handle, tick)
+	var sample_sheep: bool = record.species == SimTypes.Species.SHEEP and (tick % 60 == 59 or tick == END_TICK - 1)
 	if record.species == SimTypes.Species.DOG and (tick % ProductionDogDiagnostics.SAMPLE_PERIOD_TICKS == 0 or tick == END_TICK - 1):
 		_dog_diagnostics.sample(_world, record, context, intent, position, tick, Time.get_ticks_usec() - _started_usec, _wolves)
 	if intent == null or intent.owner_token != context.task_token:
+		if sample_sheep:
+			_sample_sheep_terminal(record, tick, position, "protocol_endpoint" if tick == END_TICK - 1 else "periodic_end_of_step")
 		return
 	if intent.behavior == record.response_behavior():
 		if record.decision_tick < 0:
@@ -265,19 +278,89 @@ func _observe_response(record: ProductionBehaviorTrace, tick: int, position: Vec
 				record.away_tick = tick + 1
 	if _recovery_started and record.recovery_eligible_tick >= 0:
 		_observe_recovery(record, context, intent, position, tick)
+	if sample_sheep:
+		_sample_sheep_terminal(record, tick, position, "protocol_endpoint" if tick == END_TICK - 1 else "periodic_end_of_step")
 
 func _observe_recovery(record: ProductionBehaviorTrace, context: AgentContext, intent: MotionIntent, position: Vector2, tick: int) -> void:
 	var recovered: bool = false
+	var recovery_kind_v2: String = "NONE"
 	if record.species == SimTypes.Species.SHEEP:
 		recovered = intent.behavior in [SimTypes.Behavior.GRAZE, SimTypes.Behavior.REGROUP, SimTypes.Behavior.SEARCH]
+		if recovered:
+			recovery_kind_v2 = "LEGACY_" + SimTypes.Behavior.keys()[intent.behavior]
+		elif _world.store.is_alive(record.handle):
+			var dense: int = _world.store.resolve(record.handle)
+			var rest_evidence: String = ProductionBehaviorTrace.satiated_rest_evidence(context, intent, tick, _world.store.hunger[dense])
+			if rest_evidence == "VERIFIED_SATIATED_REST":
+				recovery_kind_v2 = rest_evidence
 	elif record.species == SimTypes.Species.DOG:
 		var anchor: Vector2 = context.protection_anchor
 		if intent.behavior == SimTypes.Behavior.RETURN:
 			record.return_motion_pixels += maxf(0.0, (position - record.previous_position).dot((anchor - record.previous_position).normalized()))
 		recovered = intent.behavior == SimTypes.Behavior.GUARD and context.flock_count > 0 and position.distance_to(anchor) <= _world.ai.settings.guard_arrival_distance
+		if recovered:
+			recovery_kind_v2 = "LEGACY_DOG_GUARD"
 	if recovered and record.recovery_tick < 0:
 		record.recovery_tick = tick + 1
 		record.recovery_usec = Time.get_ticks_usec() - _started_usec
+	if recovery_kind_v2 != "NONE" and record.recovery_v2_tick < 0:
+		record.recovery_v2_tick = tick + 1
+		record.recovery_v2_usec = Time.get_ticks_usec() - _started_usec
+		record.recovery_v2_kind = recovery_kind_v2
+		if record.species == SimTypes.Species.SHEEP:
+			record.sheep_recovery_v2 = _sheep_state(record, context, intent, tick, position, "first_recovery_v2")
+
+func _sample_sheep_terminal(record: ProductionBehaviorTrace, tick: int, position: Vector2, phase: String) -> void:
+	if record.species != SimTypes.Species.SHEEP:
+		return
+	var context: AgentContext = _world.ai.inspect(record.handle)
+	if context == null:
+		return
+	var intent: MotionIntent = _world.intents.get_intent(record.handle, tick)
+	record.sheep_terminal = _sheep_state(record, context, intent, tick, position, phase)
+
+## Compact evidence is retained only at periodic/final/death/removal endpoints
+## and the first v2 recovery. No per-tick sheep history or live object escapes.
+func _sheep_state(record: ProductionBehaviorTrace, context: AgentContext, intent: MotionIntent, tick: int, position: Vector2, phase: String) -> Dictionary:
+	var dense: int = _world.store.resolve(record.handle)
+	# Interaction marks the target dead before emitting CaptureEvent. Its row
+	# must not be resolved as a live animal or recovered through a cached dense.
+	# Retain this same life's pre-step scalar, with an explicit earlier phase.
+	var hunger: float = record.previous_hunger
+	var hunger_phase: String = "pre_step_before_capture"
+	var rest_evidence: String = "DEAD_BEFORE_LIFECYCLE_REMOVAL"
+	if dense >= 0:
+		hunger = _world.store.hunger[dense]
+		hunger_phase = "observed_state"
+		rest_evidence = ProductionBehaviorTrace.satiated_rest_evidence(context, intent, tick, hunger)
+	else:
+		assert(record.previous_state_tick == tick and is_finite(hunger), "Capture must retain this life's same-step input scalar")
+	return {
+		"handle": record.handle.key(), "tick": tick, "phase": phase,
+		"elapsed_usec": Time.get_ticks_usec() - _started_usec,
+		"position_x": position.x, "position_y": position.y,
+		"task": str(context.task_name), "task_token": context.task_token,
+		"context_tick": context.current_tick, "perception_tick": context.last_perception_tick,
+		"decision_tick": context.last_decision_tick, "perception_queued": context.perception_queued,
+		"decision_queued": context.decision_queued, "urgent_queued": context.urgent_queued,
+		"active": _world.store.is_active(record.handle), "suspended": context.suspended,
+		"awaiting_resume_perception": context.awaiting_resume_perception,
+		"intent_present": intent != null, "intent_owned": intent != null and intent.owner_token == context.task_token,
+		"intent_token": intent.owner_token if intent != null else -1,
+		"intent_expires_tick": intent.expires_tick if intent != null else -1,
+		"behavior": SimTypes.Behavior.keys()[intent.behavior] if intent != null else "NONE",
+		"mode": SimTypes.IntentMode.keys()[intent.mode] if intent != null else "NONE",
+		"intent_speed": intent.speed if intent != null else -1.0,
+		"hunger": hunger, "hungry_threshold": _world.ai.settings.hungry_threshold,
+		"hunger_phase": hunger_phase, "hunger_observed_tick": tick,
+		"satiated_threshold": _world.ai.settings.satiated_threshold,
+		"grazing_committed": context.grazing_committed, "safe_after_tick": context.safe_after_tick,
+		"threat_valid": context.threat != null and context.observation_for(context.threat.handle, tick) != null,
+		"rest_evidence": rest_evidence,
+		"recovery_eligible_tick": record.recovery_eligible_tick,
+		"recovery_tick": record.recovery_tick, "recovery_v2_tick": record.recovery_v2_tick,
+		"recovery_v2_kind": record.recovery_v2_kind,
+	}
 
 func _observe_invalidated_target() -> void:
 	if _retired_target == null or _invalidation_cleared_tick >= 0:
@@ -295,8 +378,10 @@ func _on_capture(event: CaptureEvent) -> void:
 		# Capture is emitted before removal: retain same-step issued intent and
 		# movement instead of silently dropping a dead nonresponder from the cohort.
 		_observe_response(record, event.tick - 1, event.position)
+		_sample_sheep_terminal(record, event.tick - 1, event.position, "captured_before_removal")
 		record.alive = false
 		record.death_tick = event.tick
+		record.close_exposure(event.tick, "CAPTURE")
 	if _retired_target != null and event.target.same_life(_retired_target) and event.tick > _invalidation_tick:
 		_illegal_retired_captures += 1
 	_captures.append({"actor": event.actor.key(), "target": event.target.key(), "tick": event.tick})
@@ -328,8 +413,20 @@ func _sample_quality() -> void:
 func finish_report() -> Dictionary:
 	assert(finished)
 	var records: Array[Dictionary] = []
+	var sheep_terminal: Array[Dictionary] = []
+	var sheep_recovery: Array[Dictionary] = []
+	var exposure_episodes: Array[Dictionary] = []
 	for record: ProductionBehaviorTrace in _records:
 		records.append(record.to_dictionary())
+		if not record.sheep_terminal.is_empty():
+			sheep_terminal.append(record.sheep_terminal.duplicate(true))
+		if not record.sheep_recovery_v2.is_empty():
+			sheep_recovery.append(record.sheep_recovery_v2.duplicate(true))
+		for episode: Dictionary in record.exposure_episodes:
+			var row: Dictionary = episode.duplicate(true)
+			row["handle"] = record.handle.key()
+			row["case"] = record.case_name()
+			exposure_episodes.append(row)
 	var outcomes: Array[Dictionary] = []
 	var group_outcomes: Array[Dictionary] = []
 	for label: String in ["sheep_flee", "wolf_retreat_from_dog", "dog_intercept"]:
@@ -343,7 +440,9 @@ func finish_report() -> Dictionary:
 			group_result["group"] = group
 			group_outcomes.append(group_result)
 	return {
-		"protocol": "production-two-flocks-v1", "seed": _seed, "requested_sheep": _sheep_count,
+		"protocol": "production-two-flocks-v2", "stimulus_protocol": "production-two-flocks-v1",
+		"recovery_definition": "v1 columns preserved; v2 adds verified owned rest_satiated STOP/IDLE while satiated, uncommitted and safe",
+		"seed": _seed, "requested_sheep": _sheep_count,
 		"world_size": [2400, 1400], "body_spacing": BODY_SPACING,
 		"warmup_ticks": THREAT_TICK, "dog_tick": DOG_TICK, "threat_clear_tick": CLEAR_THREATS_TICK,
 		"end_tick": _world.tick, "fixed_dt": _world.config.fixed_dt,
@@ -351,6 +450,8 @@ func finish_report() -> Dictionary:
 		"detached_ai": _world.config.detached_ai, "wall_seconds": float(Time.get_ticks_usec() - _started_usec) / 1000000.0,
 		"observer_usec": observer_usec, "observed_steps": observed_steps,
 		"outcomes": outcomes, "group_outcomes": group_outcomes, "records": records, "quality": _quality.duplicate(true),
+		"sheep_terminal": sheep_terminal, "sheep_recovery_v2": sheep_recovery,
+		"exposure_episodes": exposure_episodes, "exposure_episode_limit_per_life": ProductionBehaviorTrace.MAX_EXPOSURE_EPISODES,
 		"events": _events.duplicate(true), "captures": _captures.duplicate(true),
 		"dog_contexts": _dog_diagnostics.contexts.duplicate(true), "dog_threats": _dog_diagnostics.threats.duplicate(true),
 		"dog_diagnostic_period_ticks": ProductionDogDiagnostics.SAMPLE_PERIOD_TICKS,
@@ -364,7 +465,8 @@ func finish_report() -> Dictionary:
 		"repeatability": "Seed controls initial jitter; stimuli use declared simulation ticks and current cohort edges. Wall-budget scheduling may change trajectories and adaptive target selection. Repeat seeds and retain all outcomes rather than asserting identical whole-world replay.",
 		"clock_semantics": "Exposure at post-stage0/pre-AI state n; knowledge and owned decision inspected at end of n; physical movement completes at n+1. Wall timestamps are observer detection times, not precise intra-step BT timestamps. Same-step captures retain outcomes before lifecycle removal. Direct tick is original sighting tick; known source is end-of-step source, not intra-step ordering.",
 		"eligibility": "Sheep/dog: any registered wolf geometrically inside perception radius. Wolf: registered dog inside risk radius. No-observation/no-response/death/protocol-removal remain explicit; geometric dog exposure alone does not guarantee a protected flock was known. Replacement life is a distinct cohort record.",
+		"exposure_semantics": "Geometry is checked at each post-stage0/pre-AI tick in [240,600). Episodes are the union of eligible stimuli with inclusive start/exclusive end, not proof of perception. First eight segments per life are retained; exact total ticks/count/longest and latest segment summary survive truncation. An unresponded life still exposed when the protocol removes threats or ends its observation window is right-censored, remains in the original denominator, and is not a success. Gaps before delayed knowledge cannot be attributed to scheduling alone.",
 		"motion_semantics": "Intended motion requires accumulated positive projection >=1px while response intent is valid and owned; outward escape is a separate radial projection. Peak speed and actual path length are retained. These prove executed motion, not successful escape. Grazing/stopping outside a response is never a motion failure.",
-		"acceptance": "Metrics, not automatic acceptance. An unexercised branch is not a pass. Successful-only latency quantiles must be read together with eligible/censored/dead counts. Recovery includes only surviving responders when threats are removed; dog endpoint at current anchor and actual return displacement are separate.",
+		"acceptance": "Metrics, not automatic acceptance. An unexercised branch is not a pass. Successful-only latency quantiles must be read together with eligible/censored/dead counts. Recovery includes only surviving responders when threats are removed; dog endpoint at current anchor and actual return displacement are separate. Original recovered/recovery_tick retain v1; recovered_v2/recovery_v2_tick add verified satiated rest. A first valid recovery is not a sustained recovery guarantee. Terminal records show the final observed state, not a retroactive correction to old runs.",
 		"instrumentation": "Full-cohort read-only observer cost is included in wall time, outside the AI allowance. Pre-AI/capture hooks are inside World.step; after_step is outside its timer. observer_usec includes pre/post hooks and capture callback. Do not compare this run's throughput directly to unprobed capacity.",
 	}

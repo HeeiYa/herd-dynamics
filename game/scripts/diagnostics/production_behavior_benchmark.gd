@@ -70,6 +70,9 @@ func _run() -> void:
 	var saved: bool = _write_json(output.path_join("summary.json"), report)
 	saved = _write_records(output.path_join("responses.csv"), report["records"]) and saved
 	saved = _write_records(output.path_join("quality.csv"), report["quality"]) and saved
+	saved = _write_records(output.path_join("sheep-terminal.csv"), report["sheep_terminal"]) and saved
+	saved = _write_records(output.path_join("sheep-recovery-v2.csv"), report["sheep_recovery_v2"]) and saved
+	saved = _write_records(output.path_join("exposure-episodes.csv"), report["exposure_episodes"]) and saved
 	saved = _write_records(output.path_join("dog-contexts.csv"), report["dog_contexts"]) and saved
 	saved = _write_records(output.path_join("dog-threats.csv"), report["dog_threats"]) and saved
 	print(JSON.stringify({"protocol": report["protocol"], "seed": report["seed"], "sheep": sheep_count,
