@@ -14,6 +14,11 @@ func _run() -> void:
 			options[pair[0]] = pair[1]
 	var sheep_count: int = int(options.get("sheep", "80"))
 	var behavior_case: String = options.get("behavior-case", "two-flocks")
+	var geometry_error: String = ProductionHuntGeometry.argument_error(OS.get_cmdline_user_args(), behavior_case, sheep_count)
+	if not geometry_error.is_empty():
+		push_error(geometry_error)
+		get_tree().quit(1)
+		return
 	if behavior_case not in ["two-flocks", "hunt-cooperation", "forage-migration", "forage-empty"]:
 		push_error("Unknown production behavior case: " + behavior_case)
 		get_tree().quit(1)
@@ -70,6 +75,15 @@ func _run() -> void:
 	report["screen_hz"] = DisplayServer.screen_get_refresh_rate()
 	report["vsync"] = DisplayServer.window_get_vsync_mode()
 	report["execution"] = "actual worker; frontend continues rendering; completed immutable report transferred once"
+	if not report.get("fixture_valid", true):
+		var failure_output: String = options.get("output", "user://production-behavior")
+		DirAccess.make_dir_recursive_absolute(failure_output)
+		_write_json(failure_output.path_join("summary.json"), report)
+		push_error("Production hunt fixture rejected: " + str(report["fixture_error"]))
+		_main.queue_free()
+		await get_tree().process_frame
+		get_tree().quit(1)
+		return
 	var valid_backend: bool = report["motion_backend"] == "gpu" and report["detached_ai"] and int(report["ai_budget_usec"]) == 6000
 	report["production_backend_valid"] = valid_backend
 	var output: String = options.get("output", "user://production-behavior")

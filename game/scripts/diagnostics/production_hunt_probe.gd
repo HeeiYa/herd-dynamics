@@ -5,7 +5,12 @@ extends ProductionBehaviorProtocol
 const HUNTER_TICK: int = 240
 const END_TICK: int = 1200
 const SAMPLE_PERIOD: int = 3
-const HUNTER_OFFSETS: Array[Vector2] = [Vector2(-110, 0), Vector2(-100, -50), Vector2(-100, 50)]
+const HUNTER_OFFSETS: Array[Vector2] = ProductionHuntGeometry.BASELINE_OFFSETS
+var geometry_variant: ProductionHuntGeometry.Variant = ProductionHuntGeometry.Variant.BASELINE
+var _fixture_error: String = ""
+var _requested_hunter_positions: Array[Vector2] = []
+var _registered_hunters: Array[Dictionary] = []
+var _stimulus_reference: Vector2
 var _world: SimulationWorld
 var _seed: int
 var _sheep_count: int
@@ -33,9 +38,15 @@ func setup(world: SimulationWorld, sheep_count: int, seed_value: int) -> void:
 	_seed = seed_value
 	_sheep_count = sheep_count
 	_started_usec = Time.get_ticks_usec()
+	if geometry_variant == ProductionHuntGeometry.Variant.INVALID:
+		_fail_geometry("Unknown hunt geometry.")
+		return
+	if geometry_variant != ProductionHuntGeometry.Variant.BASELINE and sheep_count != 80:
+		_fail_geometry("Changed hunt geometries require exactly 80 sheep.")
+		return
 	world.diagnostic_step_started = observe_step_start
 	world.captured.connect(_on_capture)
-	world.queue_place(SimTypes.Species.SHEEP, Vector2(600, 700))
+	var sheep_positions: Array[Vector2] = [Vector2(600, 700)]
 	var random := RandomNumberGenerator.new()
 	random.seed = seed_value
 	var count: int = sheep_count - 1
@@ -43,7 +54,13 @@ func setup(world: SimulationWorld, sheep_count: int, seed_value: int) -> void:
 	var rows: int = ceili(float(count) / columns)
 	for index: int in count:
 		var offset := Vector2(index % columns - (columns - 1) * 0.5, index / columns - (rows - 1) * 0.5) * 32.0
-		world.queue_place(SimTypes.Species.SHEEP, Vector2(1800, 700) + offset + Vector2(random.randf_range(-2, 2), random.randf_range(-2, 2)))
+		sheep_positions.append(Vector2(1800, 700) + offset + Vector2(random.randf_range(-2, 2), random.randf_range(-2, 2)))
+	for position: Vector2 in sheep_positions:
+		if not ProductionHuntGeometry.body_inside_world(position, world.config.agent_radius, world.config.world_size):
+			_fail_geometry("An initial sheep body would cross the world boundary.")
+			return
+	for position: Vector2 in sheep_positions:
+		world.queue_place(SimTypes.Species.SHEEP, position)
 
 func before_step(world: SimulationWorld) -> void:
 	if finished or world.tick != HUNTER_TICK:
@@ -52,8 +69,17 @@ func before_step(world: SimulationWorld) -> void:
 	var dense: int = world.store.resolve(_bait)
 	assert(dense >= 0, "No predator or removal precedes the hunter stimulus")
 	var position: Vector2 = world.store.position_current[dense]
-	for offset: Vector2 in HUNTER_OFFSETS:
-		world.queue_place(SimTypes.Species.WOLF, position + offset)
+	_stimulus_reference = position
+	for offset: Vector2 in ProductionHuntGeometry.offsets(geometry_variant):
+		_requested_hunter_positions.append(position + offset)
+	var error: String = ProductionHuntGeometry.placement_error(position, _requested_hunter_positions,
+		world.config.agent_radius, world.config.world_size, world.config.perception_radius, world.ai.settings.cooperation_radius)
+	if not error.is_empty():
+		_fail_geometry(error)
+		observer_usec += Time.get_ticks_usec() - started
+		return
+	for hunter_position: Vector2 in _requested_hunter_positions:
+		world.queue_place(SimTypes.Species.WOLF, hunter_position)
 	_events.append({"event": "registered_three_hunters", "scheduled_tick": world.tick,
 		"reference_life": _bait.key(), "reference_position": [position.x, position.y],
 		"meaning": "External stimulus placement only; no target, task or reservation is assigned"})
@@ -70,8 +96,17 @@ func observe_step_start(world: SimulationWorld) -> void:
 			if world.store.species[dense] == SimTypes.Species.WOLF:
 				var record := ProductionHuntTrace.new()
 				record.handle = world.store.handle_at(dense)
+				var position: Vector2 = world.store.position_current[dense]
+				if _records.size() >= _requested_hunter_positions.size() or position != _requested_hunter_positions[_records.size()]:
+					_fail_geometry("Registered hunter positions differ from the requested stimulus.")
+					observer_usec += Time.get_ticks_usec() - started
+					return
 				_records.append(record)
-		assert(_records.size() == 3)
+				_registered_hunters.append({"handle": record.handle.key(), "position": [position.x, position.y]})
+		if _records.size() != 3:
+			_fail_geometry("The declared three hunters were not registered.")
+			observer_usec += Time.get_ticks_usec() - started
+			return
 	for record: ProductionHuntTrace in _records:
 		var dense: int = world.store.resolve(record.handle)
 		assert(dense >= 0)
@@ -299,6 +334,10 @@ func _sample_quality(tick: int) -> void:
 
 func finish_report() -> Dictionary:
 	assert(finished)
+	if not _fixture_error.is_empty():
+		var failure: Dictionary = report_header(_world, "production-hunt-cooperation-v1", _seed, _sheep_count, _started_usec)
+		failure.merge(_geometry_report())
+		return failure
 	var records: Array[Dictionary] = []
 	var roles: Array[Dictionary] = []
 	var terminal: Array[Dictionary] = []
@@ -322,6 +361,7 @@ func finish_report() -> Dictionary:
 		outcome["feeding_after_capture"] += int(record.feed_tick >= 0)
 		outcome["physically_stopped_feeding"] += int(record.feed_stopped_tick >= 0)
 	var report: Dictionary = report_header(_world, "production-hunt-cooperation-v1", _seed, _sheep_count, _started_usec)
+	report.merge(_geometry_report())
 	report.merge({"case": "hunt_cooperation", "outcomes": [outcome], "records": records, "roles": roles,
 		"terminal": terminal, "samples": _samples.duplicate(true), "attack_steps": _attack_steps.duplicate(true), "quality": _quality.duplicate(true),
 		"attack_trace_version": "same-phase-attack-steps-v1",
@@ -333,3 +373,18 @@ func finish_report() -> Dictionary:
 		"role_evidence": "Only valid owned HUNT leases and matching CHASE/FLANK intents for the one complete declared target life count. Physical role evidence needs >=1px along the intended direction and >=1px toward actual pre-step prey (MAIN) or signed lateral to its pre-step velocity, falling back to actor-to-prey direction (LEFT/RIGHT). These are independent observer geometry axes, never passed to AI; they do not reconstruct the BT's historical sighting or prove its exact flank-offset formula. Merely entering FLANK is insufficient. Role changes remain per-life/per-role records, never combined into a rate denominator.",
 		"scope": "Isolated registered sheep and distant background flock; three registered wolves appear at tick240 around its actual position as an external experiment. No target, lease, hunger, speed, task or output is forced. CaptureEvent, nutrition state, later owned FEED/actual stopping and end states are separate evidence. A finite-horizon no-capture outcome is retained, not converted to success."})
 	return report
+
+func _fail_geometry(reason: String) -> void:
+	_fixture_error = reason
+	finished = true
+
+func _geometry_report() -> Dictionary:
+	var positions: Array[Array] = []
+	for position: Vector2 in _requested_hunter_positions:
+		positions.append([position.x, position.y])
+	return {"geometry_version": ProductionHuntGeometry.VERSION,
+		"geometry_variant": ProductionHuntGeometry.variant_name(geometry_variant),
+		"fixture_valid": _fixture_error.is_empty(), "fixture_error": _fixture_error,
+		"stimulus_reference_position": [_stimulus_reference.x, _stimulus_reference.y],
+		"requested_hunter_positions": positions, "registered_hunters": _registered_hunters.duplicate(true),
+		"geometry_scope": "Only the three hunter offsets change. Prey/background layout, clock, budget and policies are unchanged. Actual bodies and opportunities are checked before registration; invalid geometry is rejected, never clamped or retried."}

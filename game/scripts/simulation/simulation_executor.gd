@@ -298,7 +298,9 @@ func _setup_behavior_probe(world: SimulationWorld) -> void:
 		"two-flocks":
 			_behavior_probe = ProductionBehaviorProbe.new()
 		"hunt-cooperation":
-			_behavior_probe = ProductionHuntProbe.new()
+			var hunt := ProductionHuntProbe.new()
+			hunt.geometry_variant = ProductionHuntGeometry.from_arguments(arguments)
+			_behavior_probe = hunt
 		"forage-migration", "forage-empty":
 			var forage := ProductionForageProbe.new()
 			forage.empty_control = behavior_case == "forage-empty"
