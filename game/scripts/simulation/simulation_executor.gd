@@ -164,6 +164,17 @@ func endurance_status() -> Dictionary:
 	_mutex.unlock()
 	return result
 
+## Diagnostic-only polling. Unchanged frames copy nothing; a changed sample
+## is an owned scalar record. This never scans World or drains reliable events.
+func poll_endurance_sample(after_sequence: int) -> Dictionary:
+	_mutex.lock()
+	var sample: Dictionary = _endurance_snapshot.get("sample", {})
+	var result: Dictionary = {}
+	if int(sample.get("sample_sequence", 0)) > after_sequence:
+		result = sample.duplicate(true)
+	_mutex.unlock()
+	return result
+
 func take_endurance_report() -> Dictionary:
 	_mutex.lock()
 	var result: Dictionary = _endurance_report

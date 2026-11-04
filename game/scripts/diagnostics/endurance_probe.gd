@@ -21,6 +21,9 @@ var _epoch: int = 0
 var _next_sample_usec: int = 0
 var _next_turnover_tick: int = -1
 var _sample_sequence: int = 0
+var _window_samples: int = 0
+var _first_window_sample: int = -1
+var _last_window_sample: int = -1
 var _started: bool = false
 var _previous_counts := PackedInt32Array([0, 0, 0])
 var _capture_delta := PackedInt32Array([0, 0, 0])
@@ -145,6 +148,11 @@ func observe_publication(publication: SimulationPublication) -> void:
 		latest_sample = _sample_service(publication, in_window)
 		_sample_sequence += 1
 		latest_sample["sample_sequence"] = _sample_sequence
+		if in_window:
+			if _first_window_sample < 0:
+				_first_window_sample = _sample_sequence
+			_last_window_sample = _sample_sequence
+			_window_samples += 1
 		status_revision += 1
 	observer_usec += Time.get_ticks_usec() - started
 
@@ -221,7 +229,10 @@ func _on_observer_event(record: Dictionary) -> void:
 
 func _sample_service(publication: SimulationPublication, in_window: bool) -> Dictionary:
 	var started: int = Time.get_ticks_usec()
-	var row: Dictionary = {"sample_usec": started, "tick": publication.tick,
+	# Window membership follows the completed publication, even when this scan
+	# starts after T1. sample_usec measures observation work, not its denominator.
+	var row: Dictionary = {"sample_usec": started, "publication_usec": publication.published_usec,
+		"tick": publication.tick,
 		"epoch": publication.epoch, "population": _world.store.count,
 		"capacity": _world.store.capacity, "sheep": publication.counts[0],
 		"wolves": publication.counts[1], "dogs": publication.counts[2],
@@ -318,6 +329,8 @@ func _finish() -> void:
 		"active_actor_steps": _active_actor_steps, "missing_actor_steps": _missing_actor_steps,
 		"grass_consumed": _grass_consumed, "observer_usec": observer_usec - _observer_at_start,
 		"service_scan_usec": _service_scan_usec - _service_scan_at_start, "sample_sequence": _sample_sequence,
+		"window_sample_count": _window_samples, "first_window_sample_sequence": _first_window_sample,
+		"last_window_sample_sequence": _last_window_sample,
 		"service_observed": observe_service, "motion_backend": _world.motion.backend_status,
 		"detached_ai": _world.config.detached_ai, "ai_budget_usec": _world.config.ai_budget_usec,
 		"observed_reused_lives": _observed_reuses, "observed_generation_advance": _generation_advance,

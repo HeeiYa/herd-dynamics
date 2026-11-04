@@ -21,6 +21,16 @@ var _controls_rejected: int = 0
 var _samples_rejected: int = 0
 var _missed_worker_samples: int = 0
 var _last_worker_sample: int = 0
+var _first_window_sample: int = -1
+var _last_window_sample: int = -1
+var _window_samples_received: int = 0
+var _window_samples_recorded: int = 0
+var _sample_window_errors: int = 0
+var _owner_poll_calls: int = 0
+var _owner_poll_copies: int = 0
+var _owner_poll_usec: int = 0
+var _owner_poll_window_usec: int = 0
+var _owner_poll_window_calls: int = 0
 var _budget_overruns: int = 0
 var _maximum_overrun_usec: int = 0
 var _output: String
@@ -123,6 +133,7 @@ func _run() -> void:
 	while Time.get_ticks_usec() < _end_usec:
 		await RenderingServer.frame_post_draw
 		var now: int = Time.get_ticks_usec()
+		_collect_owner_sample()
 		# Include only complete frame intervals whose endpoints belong to this window.
 		if now <= _end_usec:
 			_frame_times.add(float(now - previous_frame_usec) / 1000.0)
@@ -132,7 +143,7 @@ func _run() -> void:
 		previous_frame_usec = now
 		if now < _end_usec and now >= next_sample:
 			next_sample = now + 1000000
-			_append_sample(now)
+			_append_frontend_sample(now)
 		if now < _end_usec and now >= next_control and _inflight_request == 0:
 			next_control = now + 1000000
 			_submit_control()
@@ -144,17 +155,22 @@ func _run() -> void:
 		await get_tree().process_frame
 		if owner_report.is_empty():
 			owner_report = _access.executor.take_endurance_report()
+		_collect_owner_sample()
 	# Shutdown-only join/drain. Late reliable metrics are timestamp-filtered by
 	# _on_delivery, so this cannot enlarge the throughput numerator or wall window.
 	_access.close()
 	if owner_report.is_empty():
 		owner_report = _access.executor.take_endurance_report()
+	# The final report and latest sample are exchanged under the same owner
+	# lock. Poll after taking the report (and shutdown drain) to include its tail.
+	_collect_owner_sample()
+	var coverage_complete: bool = _owner_coverage_matches(owner_report)
 	var complete: bool = not owner_report.is_empty()
 	complete = complete and bool(owner_report.get("valid_window", false))
 	complete = complete and int(owner_report.get("steps", -1)) == _steps and int(owner_report.get("error_count", 1)) == 0
 	complete = complete and int(owner_report.get("first_step_sequence", -2)) == _first_step_sequence and int(owner_report.get("last_step_sequence", -2)) == _last_step_sequence
 	complete = complete and owner_report.get("motion_backend", "") == "gpu" and int(owner_report.get("ai_budget_usec", 0)) == 6000
-	complete = complete and _inflight_request == 0 and _controls_rejected == 0 and _samples_rejected == 0 and _missed_worker_samples == 0
+	complete = complete and _inflight_request == 0 and _controls_rejected == 0 and _samples_rejected == 0 and coverage_complete
 	_logger.try_append_endurance_sample({"event": "endurance_complete", "in_window": false,
 		"steps": _steps, "complete_before_log_close": complete, "end_usec": _end_usec})
 	_logger.close()
@@ -163,7 +179,7 @@ func _run() -> void:
 	var step_histograms: Dictionary = {}
 	for name: String in _step_times:
 		step_histograms[name] = _step_times[name].summary(true)
-	var report: Dictionary = {"protocol": "endurance-v1", "smoke": smoke,
+	var report: Dictionary = {"protocol": "endurance-v2", "smoke": smoke,
 		"complete": complete, "mode": mode, "seed": scenario.random_seed,
 		"targets": Array(targets), "warmup_seconds": warmup_seconds,
 		"start_usec": _start_usec, "end_usec": _end_usec, "sample_seconds": sample_seconds,
@@ -177,8 +193,15 @@ func _run() -> void:
 		"controls_submitted": _controls_submitted, "controls_received": _controls_received,
 		"controls_rejected": _controls_rejected, "control_unresponded": int(_inflight_request != 0),
 		"samples_rejected": _samples_rejected, "missed_worker_samples": _missed_worker_samples,
-		"sample_coverage_complete": _samples_rejected == 0 and _missed_worker_samples == 0,
-		"sample_coverage_scope": "Independent 1Hz owner/frontend clocks may skip a latest sample through phase drift. Such a gap fails conservative detail coverage, not reliable-step delivery; owner histograms still include the skipped observation.",
+		"owner_samples_received": _window_samples_received, "owner_samples_recorded": _window_samples_recorded,
+		"first_owner_sample_sequence": _first_window_sample, "last_owner_sample_sequence": _last_window_sample,
+		"sample_window_errors": _sample_window_errors,
+		"sample_coverage_complete": coverage_complete and _samples_rejected == 0,
+		"sample_coverage_scope": "Owner records are polled each frontend frame and once after the final report. Publication timestamps define [start,end); first/last/count must match the owner window. Any overwritten record or rejected log row fails completeness. Frontend summaries retain their independent 1Hz cadence.",
+		"owner_poll_calls": _owner_poll_calls, "owner_poll_copies": _owner_poll_copies,
+		"owner_poll_usec": _owner_poll_usec,
+		"owner_poll_window_usec": _owner_poll_window_usec, "owner_poll_window_calls": _owner_poll_window_calls,
+		"owner_poll_scope": "Main-thread poll/lock/copy elapsed time; total includes drain and post-close polls. Window counters include only whole poll intervals inside [start,end). Window work contributes to frame intervals and throughput, not owner observer_usec. Unchanged polls compare a sequence; only changed scalar records are copied. Log encoding is outside this sub-timer.",
 		"budget_overrun_frames": _budget_overruns, "maximum_overrun_usec": _maximum_overrun_usec,
 		"engine": Engine.get_version_info(), "debug_build": OS.is_debug_build(),
 		"processor": OS.get_processor_name(), "gpu": RenderingServer.get_video_adapter_name(),
@@ -190,7 +213,7 @@ func _run() -> void:
 		"clock_semantics": "Frames are complete intervals inside [start,end]. Reliable steps use publication timestamps in [start,end). Receipt cohort uses submitted time; drain latency is retained separately from window throughput. Diagnostic mutex snapshots have their own read_usec endpoints.",
 		"limitations": "1Hz service observations are not all-job or threat-response latency. GRAZE count is intent; actual grass food is independent. OS memory must be sampled externally. Occupied background runs do not establish clean capacity."}
 	var saved: bool = _write_report(report)
-	print(JSON.stringify({"protocol": "endurance-v1", "complete": complete, "steps": _steps, "output": _output}))
+	print(JSON.stringify({"protocol": "endurance-v2", "complete": complete, "steps": _steps, "output": _output}))
 	_main.queue_free()
 	await get_tree().process_frame
 	get_tree().quit(0 if complete and saved else 1)
@@ -208,14 +231,33 @@ func _on_delivery(metrics: SimulationTelemetry) -> void:
 	_step_times["motion"].add(metrics.phase_usec[4] / 1000.0)
 	_step_times["interaction"].add(metrics.phase_usec[5] / 1000.0)
 
-func _append_sample(now: int) -> void:
-	var state: Dictionary = _access.executor.endurance_status()
-	var row: Dictionary = state.get("sample", {}).duplicate(true)
-	var sequence: int = int(row.get("sample_sequence", 0))
-	var fresh: bool = _observe_sample_sequence(sequence)
+func _collect_owner_sample() -> void:
+	var started: int = Time.get_ticks_usec()
+	var row: Dictionary = _access.executor.poll_endurance_sample(_last_worker_sample)
+	var received_usec: int = Time.get_ticks_usec()
+	var elapsed_usec: int = received_usec - started
+	_owner_poll_usec += elapsed_usec
+	_owner_poll_calls += 1
+	if started >= _start_usec and received_usec < _end_usec:
+		_owner_poll_window_usec += elapsed_usec
+		_owner_poll_window_calls += 1
+	if row.is_empty():
+		return
+	_owner_poll_copies += 1
+	if not _observe_owner_sample(row):
+		return
+	row.merge({"event": "endurance_owner_sample", "frontend_usec": received_usec,
+		"unix_seconds": Time.get_unix_time_from_system(),
+		"worker_sample_age_usec": received_usec - int(row["sample_usec"])}, true)
+	if _logger.try_append_endurance_sample(row):
+		_window_samples_recorded += 1
+	else:
+		_samples_rejected += 1
+
+func _append_frontend_sample(now: int) -> void:
 	var counters: Dictionary = _access.executor.diagnostic_counters()
-	row.merge({"event": "endurance_sample", "frontend_usec": now, "unix_seconds": Time.get_unix_time_from_system(),
-		"worker_sample_fresh": fresh, "worker_sample_age_usec": now - int(row.get("sample_usec", now)),
+	var row: Dictionary = {"event": "endurance_frontend_sample", "frontend_usec": now,
+		"unix_seconds": Time.get_unix_time_from_system(), "in_window": true,
 		"frames_to_date": _frame_times.count, "frame_p99_upper_ms": _frame_times.percentile(0.99)["upper"],
 		"frame_max_ms": _frame_times.maximum if _frame_times.count > 0 else 0.0,
 		"display_age_ms": _main._runner.display_age_msec(now),
@@ -223,16 +265,36 @@ func _append_sample(now: int) -> void:
 		"worker_read_usec": counters["read_usec"], "backpressure_wait_usec": counters["backpressure_wait_usec"],
 		"queue_depth": counters["queue_depth"], "queue_peak_lifetime": counters["queue_peak"],
 		"backlog_seconds": _access.control_status.backlog_seconds if _access.control_status != null else 0.0,
-		"diagnostic_observer_usec": state.get("observer_usec", 0)}, true)
+		"owner_samples_received": _window_samples_received, "owner_poll_usec": _owner_poll_usec}
 	if not _logger.try_append_endurance_sample(row):
 		_samples_rejected += 1
 
-func _observe_sample_sequence(sequence: int) -> bool:
+func _observe_owner_sample(row: Dictionary) -> bool:
+	var sequence: int = int(row["sample_sequence"])
 	if sequence <= _last_worker_sample:
 		return false
-	_missed_worker_samples += maxi(0, sequence - _last_worker_sample - 1)
 	_last_worker_sample = sequence
+	var publication_usec: int = int(row["publication_usec"])
+	var in_window: bool = publication_usec >= _start_usec and publication_usec < _end_usec
+	if in_window != bool(row["in_window"]):
+		_sample_window_errors += 1
+		return false
+	if not in_window:
+		return false
+	if _first_window_sample < 0:
+		_first_window_sample = sequence
+	else:
+		_missed_worker_samples += maxi(0, sequence - _last_window_sample - 1)
+	_last_window_sample = sequence
+	_window_samples_received += 1
 	return true
+
+func _owner_coverage_matches(owner_report: Dictionary) -> bool:
+	return _sample_window_errors == 0 and _missed_worker_samples == 0 \
+		and _window_samples_received == int(owner_report.get("window_sample_count", -1)) \
+		and _window_samples_recorded == _window_samples_received \
+		and _first_window_sample == int(owner_report.get("first_window_sample_sequence", -2)) \
+		and _last_window_sample == int(owner_report.get("last_window_sample_sequence", -2))
 
 func _submit_control() -> void:
 	var command := SimulationCommand.new()

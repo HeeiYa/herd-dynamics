@@ -3,6 +3,18 @@ extends SceneTree
 var _checks: int = 0
 var _failures: int = 0
 
+class SampleLog extends ObserverSessionLog:
+	var accept: bool = true
+	var rows: int = 0
+	var last_row: Dictionary = {}
+
+	func try_append_endurance_sample(record: Dictionary) -> bool:
+		if not accept:
+			return false
+		rows += 1
+		last_row = record.duplicate(true)
+		return true
+
 func _initialize() -> void:
 	call_deferred("_run")
 
@@ -16,6 +28,8 @@ func _run() -> void:
 	_check_histogram()
 	_check_replacement_counts()
 	_check_sample_sequences()
+	_check_sample_polling_and_tail()
+	_check_sample_publication_window()
 	_check_turnover()
 	_check_spawn_allowance()
 	_check_capture_precedes_pending_remove()
@@ -65,11 +79,103 @@ func _make_world(count: int = 8) -> SimulationWorld:
 
 func _check_sample_sequences() -> void:
 	var benchmark := EnduranceBenchmark.new()
-	benchmark._last_worker_sample = 10
-	_check(not benchmark._observe_sample_sequence(10), "The same owner sample is never counted twice")
-	_check(benchmark._observe_sample_sequence(12) and benchmark._missed_worker_samples == 1, "Latest-sample phase drift is retained as a detail coverage gap")
+	benchmark._start_usec = 100
+	benchmark._end_usec = 200
+	_check(not benchmark._observe_owner_sample(_sample(8, 99)), "Warmup records never enter the window denominator")
+	_check(benchmark._observe_owner_sample(_sample(10, 100)), "A window begins at its actual first publication")
+	benchmark._window_samples_recorded += 1
+	_check(not benchmark._observe_owner_sample(_sample(10, 100)), "The same owner sample is never counted twice")
+	_check(not benchmark._owner_coverage_matches(_coverage(9, 10, 2)), "Missing the first sample fails even with no observed internal jump")
+	_check(benchmark._observe_owner_sample(_sample(12, 199)) and benchmark._missed_worker_samples == 1, "A real overwritten interior sample remains a coverage failure")
+	benchmark._window_samples_recorded += 1
+	_check(not benchmark._owner_coverage_matches(_coverage(10, 12, 2)), "An internal gap cannot be hidden by matching endpoints and count")
+	_check(not benchmark._observe_owner_sample(_sample(13, 200)), "A publication exactly at T1 belongs to drain")
+	var invalid_window: Dictionary = _sample(14, 150)
+	invalid_window["in_window"] = false
+	_check(not benchmark._observe_owner_sample(invalid_window) and benchmark._sample_window_errors == 1, "Conflicting owner membership is an explicit invariant failure")
 	_check(benchmark._steps == 0, "Sample coverage gaps do not alter the reliable step denominator")
 	benchmark.free()
+
+func _sample(sequence: int, publication_usec: int) -> Dictionary:
+	return {"sample_sequence": sequence, "publication_usec": publication_usec,
+		"sample_usec": 250, "in_window": publication_usec >= 100 and publication_usec < 200}
+
+func _coverage(first: int, last: int, count: int) -> Dictionary:
+	return {"first_window_sample_sequence": first, "last_window_sample_sequence": last,
+		"window_sample_count": count}
+
+func _check_sample_polling_and_tail() -> void:
+	var executor := SimulationExecutor.new()
+	var access := SimulationAccess.new()
+	access.executor = executor
+	var logger := SampleLog.new()
+	var benchmark := EnduranceBenchmark.new()
+	benchmark._access = access
+	benchmark._logger = logger
+	benchmark._start_usec = 100
+	benchmark._end_usec = 200
+	executor._endurance_snapshot = {"sample": _sample(8, 99)}
+	benchmark._collect_owner_sample()
+	_check(logger.rows == 0 and benchmark._last_worker_sample == 8, "An initial warmup sample is acknowledged but not logged as window data")
+	executor._endurance_snapshot = {"sample": _sample(9, 100)}
+	benchmark._collect_owner_sample()
+	_check(logger.rows == 1 and benchmark._first_window_sample == 9, "The next frontend frame collects owner sample nine without waiting for its own second")
+	var copies: int = benchmark._owner_poll_copies
+	for poll: int in 1000:
+		benchmark._collect_owner_sample()
+	_check(benchmark._owner_poll_copies == copies and logger.rows == 1, "Unchanged polls copy and log no records regardless of frame count")
+	_check(executor._endurance_snapshot["sample"].size() == 4, "Consumer log annotations cannot mutate the frozen owner sample")
+	var report: Dictionary = _coverage(9, 10, 2)
+	_check(not benchmark._owner_coverage_matches(report), "A missing final sample fails before drain, fixing the old false-complete result")
+	var final_sample: Dictionary = _sample(10, 199)
+	final_sample["sample_usec"] = Time.get_ticks_usec()
+	executor._endurance_snapshot = {"sample": final_sample}
+	executor._endurance_report = report
+	var final_report: Dictionary = executor.take_endurance_report()
+	benchmark._collect_owner_sample()
+	_check(benchmark._owner_coverage_matches(final_report), "Polling after the final report includes the last in-window publication")
+	_check(logger.rows == 2 and logger.last_row["sample_usec"] > benchmark._end_usec, "Scan and log may finish after T1 without excluding an in-window publication")
+	_check(logger.last_row["frontend_usec"] >= logger.last_row["sample_usec"] and logger.last_row["worker_sample_age_usec"] >= 0, "Reception is timestamped after polling, never before a newly published sample")
+	_check(benchmark._owner_poll_window_calls == 0, "Drain-only polls remain outside the window work denominator")
+	_check(executor.take_endurance_report().is_empty(), "The final report transfers only once")
+	benchmark._collect_owner_sample()
+	_check(logger.rows == 2 and benchmark._window_samples_received == 2, "A final repeated poll cannot count the tail twice")
+	logger.accept = false
+	executor._endurance_snapshot = {"sample": _sample(11, 199)}
+	benchmark._collect_owner_sample()
+	_check(benchmark._samples_rejected == 1 and not benchmark._owner_coverage_matches(_coverage(9, 11, 3)), "A rejected diagnostic log row cannot be rescued by successful owner receipt")
+	_check(benchmark._steps == 0, "Owner detail polling neither drains nor counts reliable steps")
+	benchmark.free()
+
+func _check_sample_publication_window() -> void:
+	var world: SimulationWorld = _make_world()
+	_step(world)
+	var probe := EnduranceProbe.new()
+	probe.setup(world, "natural", PackedInt32Array([8, 1, 1]))
+	# All scans occur after T1 in real wall time. Their publications deliberately
+	# span T0/T1 so the test would fail if membership used scan_started instead.
+	probe.start_usec = Time.get_ticks_usec() - 20
+	probe.end_usec = probe.start_usec + 10
+	probe._next_sample_usec = 0
+	probe.observe_publication(_publication(world, probe.start_usec - 1, 1))
+	_check(probe._window_samples == 0 and not probe.latest_sample["in_window"], "A pre-T0 publication stays outside even when scanned after T1")
+	probe._next_sample_usec = 0
+	var control: SimulationPublication = _publication(world, probe.start_usec, 2)
+	control.step_usec = 0
+	probe.observe_publication(control)
+	_check(probe._window_samples == 1 and probe._steps == 0, "An in-window control publication can produce a detail sample without fabricating a simulation step")
+	probe._next_sample_usec = 0
+	probe.observe_publication(_publication(world, probe.end_usec - 1, 3))
+	_check(probe.latest_sample["publication_usec"] == probe.end_usec - 1 and probe.latest_sample["sample_usec"] >= probe.end_usec, "The sample retains both its publication basis and later scan timestamp")
+	probe.observe_publication(_publication(world, probe.end_usec, 4))
+	var report: Dictionary = probe.final_report
+	_check(report["window_sample_count"] == 2 and report["first_window_sample_sequence"] == 2 and report["last_window_sample_sequence"] == 3, "Owner count and endpoints exclude warmup and T1 drain")
+	_check(report["steps"] == 1 and report["valid_window"], "Detail count remains distinct from the reliable-step denominator")
+	probe.observe_publication(_publication(world, probe.end_usec + 1, 5))
+	_check(probe.final_report["window_sample_count"] == 2 and probe._sample_sequence == 3, "Finished probes never emit or overwrite a final sample")
+	world.motion.close()
+	world.ai.reset()
+	world.free()
 
 func _publication(world: SimulationWorld, timestamp: int, sequence: int) -> SimulationPublication:
 	var result := SimulationPublication.new()
