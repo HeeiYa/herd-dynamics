@@ -20,7 +20,7 @@ corner_radius_bottom_left = 4
 script = ExtResource("script")
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_constants/separation = 8
+theme_override_constants/separation = 12
 
 [node name="Empty" type="Label" parent="."]
 modulate = Color(0.47843137, 0.41568628, 0.33333334, 1)
@@ -39,6 +39,9 @@ theme_override_font_sizes/font_size = 18
 visible = false
 layout_mode = 2
 theme_override_colors/default_color = Color(0.23137255, 0.19215687, 0.15294118, 1)
+theme_override_constants/line_separation = 6
+theme_override_font_sizes/normal_font_size = 14
+theme_override_font_sizes/bold_font_size = 14
 bbcode_enabled = true
 fit_content = true
 scroll_active = false
@@ -64,6 +67,7 @@ show_percentage = false
 [node name="Actions" type="HBoxContainer" parent="."]
 visible = false
 layout_mode = 2
+theme_override_constants/separation = 8
 
 [node name="Follow" type="Button" parent="Actions"]
 layout_mode = 2
@@ -75,16 +79,19 @@ layout_mode = 2
 focus_mode = 0
 text = "移除角色"
 
-[node name="DetailsToggle" type="Button" parent="."]
+[node name="DetailsHeading" type="Label" parent="."]
 visible = false
 layout_mode = 2
-focus_mode = 0
-toggle_mode = true
-text = "详细调试 ▸"
+theme_override_font_sizes/font_size = 16
+text = "调试信息"
 
-[node name="Details" type="Label" parent="."]
+[node name="Details" type="RichTextLabel" parent="."]
 visible = false
-modulate = Color(0.47843137, 0.41568628, 0.33333334, 1)
 layout_mode = 2
-theme_override_font_sizes/font_size = 12
-autowrap_mode = 3
+theme_override_colors/default_color = Color(0.34, 0.29, 0.23, 1)
+theme_override_constants/line_separation = 5
+theme_override_font_sizes/normal_font_size = 13
+theme_override_font_sizes/bold_font_size = 13
+bbcode_enabled = true
+fit_content = true
+scroll_active = false

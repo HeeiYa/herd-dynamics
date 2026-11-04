@@ -43,7 +43,7 @@ func setup(access: SimulationAccess, view: WorldPresentation, runner: Simulation
 	hud.tuning.regeneration_requested.connect(reset_scenario)
 	hud.inspector.follow_requested.connect(follow_selected)
 	hud.inspector.remove_requested.connect(func() -> void: _access.queue_remove(_selected))
-	hud.tuning.setup(_access.tuning, _access.queue_tuning)
+	hud.tuning.setup(_access.tuning, _access.queue_tuning, hud.world_size_rows)
 	_access.observer_commands_applied.connect(func(_tick: int) -> void: hud.tuning._clear_pending())
 	_access.observer_reset.connect(hud.tuning._on_reset)
 	hud.tuning.range_preview_changed.connect(_insight.set_range_preview)

@@ -84,17 +84,22 @@ func _details_text(world: SimulationAccess, handle: AgentHandle, context: AgentI
 	var tick: int = world.tick
 	var lines := PackedStringArray()
 	if intent != null:
-		lines.append("意图 %s / %s · token %d · 剩余 %d tick" % [SimTypes.IntentMode.keys()[intent.mode], SimTypes.behavior_name(intent.behavior), intent.owner_token, intent.expires_tick - tick])
-		lines.append("reason: %s" % intent.reason)
+		lines.append("[b]运动意图[/b]")
+		lines.append("模式  %s / %s" % [SimTypes.IntentMode.keys()[intent.mode], SimTypes.behavior_name(intent.behavior)])
+		lines.append("标识  %d    剩余  %d tick" % [intent.owner_token, intent.expires_tick - tick])
+		lines.append("原因  %s" % intent.reason)
 	if context != null:
-		lines.append("任务 %s" % context.task_name)
+		lines.append("\n[b]行为与协作[/b]")
+		lines.append("任务  %s" % context.task_name)
 		var lease: CoordinationSystem.Lease = context.lease
 		if lease != null:
 			var role: String = BehaviorText.LEASE_ROLES[lease.role] if lease.kind == CoordinationSystem.Kind.HUNT else "防守"
 			lines.append("协作 %s · 目标 %s · 至 %d" % [role, lease.target.key(), lease.expires_tick])
-		lines.append("下次感知 %d · 下次决策 %d（当前 %d）" % [context.next_perception_tick, context.next_decision_tick, tick])
-		lines.append("排队 感知 %s · 决策 %s · 紧急 %s" % [context.perception_queued, context.decision_queued, context.urgent_queued])
 		lines.append("羊群样本 %d · 锚点 (%d, %d)" % [context.flock_count, roundi(context.protection_anchor.x), roundi(context.protection_anchor.y)])
+		lines.append("\n[b]调度 · 当前 %d tick[/b]" % tick)
+		lines.append("下次感知  %d    下次决策  %d" % [context.next_perception_tick, context.next_decision_tick])
+		lines.append("排队  感知 %s · 决策 %s · 紧急 %s" % ["是" if context.perception_queued else "否", "是" if context.decision_queued else "否", "是" if context.urgent_queued else "否"])
 	if attack != null:
-		lines.append("攻击 %s · 有效 %d–%d" % [AttackRequest.Status.keys()[attack.status], attack.active_start_tick, attack.active_end_tick])
+		lines.append("\n[b]攻击窗口[/b]")
+		lines.append("%s · 有效 %d–%d tick" % [AttackRequest.Status.keys()[attack.status], attack.active_start_tick, attack.active_end_tick])
 	return "\n".join(lines)

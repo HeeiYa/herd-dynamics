@@ -25,22 +25,28 @@ class Row extends RefCounted:
 	# A reset discards the gesture until its release; no edit leaks into the new epoch.
 	var discard_drag: bool = false
 
-func setup(catalog: TuningCatalog, submit_change: Callable) -> void:
+func setup(catalog: TuningCatalog, submit_change: Callable, world_size_rows: VBoxContainer = null) -> void:
 	_catalog = catalog
 	_submit_change = submit_change
+	# Size controls live in the scenario tab but share the same draft and reset lifecycle.
 	for parameter: TuningCatalog.Parameter in _catalog.parameters:
-		_add_row(parameter)
+		var row_parent: VBoxContainer = $Rows
+		if world_size_rows != null and parameter.key in [TuningCatalog.Param.WORLD_WIDTH, TuningCatalog.Param.WORLD_HEIGHT]:
+			row_parent = world_size_rows
+		_add_row(parameter, row_parent)
 	$Footer/Restore.pressed.connect(_restore_all)
 	$Footer/ApplyGeneration.pressed.connect(func() -> void: regeneration_requested.emit())
 	refresh(false)
 
-func _add_row(parameter: TuningCatalog.Parameter) -> void:
+func _add_row(parameter: TuningCatalog.Parameter, row_parent: VBoxContainer) -> void:
 	var editor: Control = preload("res://scenes/ui/parameter_row.tscn").instantiate() as Control
-	$Rows.add_child(editor)
+	row_parent.add_child(editor)
 	var row := Row.new()
 	row.key = parameter.key
 	(editor.get_node("Header/Name") as Label).text = parameter.label
 	(editor.get_node("Header/Scope") as Label).text = parameter.scope
+	if parameter.key in [TuningCatalog.Param.WORLD_WIDTH, TuningCatalog.Param.WORLD_HEIGHT]:
+		(editor.get_node("Header/Scope") as Label).visible = false
 	(editor.get_node("Description") as Label).text = parameter.description
 	row.marker = editor.get_node("Header/Marker") as Label
 	row.slider = editor.get_node("Editor/Slider") as HSlider

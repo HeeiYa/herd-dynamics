@@ -107,13 +107,11 @@ func _regenerate(size: Vector2, cell_size: float, coverage: float) -> void:
 func _capture(suffix: String) -> void:
 	if not _main.hud.panel_open:
 		_main.hud.toggle_panel()
-	_main.hud.tabs.current_tab = 1
+	_main.hud.tabs.current_tab = 1 if suffix == "grazed" else 2
 	await process_frame
-	var scroll: ScrollContainer = _main.hud.tabs.get_node("参数") as ScrollContainer
 	if suffix == "grazed":
+		var scroll: ScrollContainer = _main.hud.tabs.get_node("参数") as ScrollContainer
 		scroll.scroll_vertical = int(scroll.get_v_scroll_bar().max_value)
-	else:
-		scroll.ensure_control_visible(_main.hud.tuning._rows[TuningCatalog.Param.WORLD_WIDTH].slider)
 	await process_frame
 	await RenderingServer.frame_post_draw
 	for argument: String in OS.get_cmdline_user_args():

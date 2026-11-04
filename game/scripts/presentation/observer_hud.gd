@@ -36,6 +36,7 @@ var toast_seconds: float = 0.0
 @onready var toolbar: PanelContainer = get_node("Toolbar")
 @onready var top_bar: PanelContainer = get_node("TopBar")
 @onready var tuning: TuningPanel = get_node("RightPanel/Tabs/参数/Tuning")
+@onready var world_size_rows: VBoxContainer = get_node("RightPanel/Tabs/场景/Scenario/WorldSizeRows")
 @onready var wolves: SpinBox = get_node("RightPanel/Tabs/场景/Scenario/WolvesRow/Wolves")
 var tool_buttons: Array[Button] = []
 var overlay_buttons: Dictionary[StringName, Button] = {}
