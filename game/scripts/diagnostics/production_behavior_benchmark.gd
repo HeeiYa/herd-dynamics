@@ -92,6 +92,10 @@ func _run() -> void:
 			saved = _write_records(output.path_join("captures.csv"), report["captures"]) and saved
 		else:
 			saved = _write_records(output.path_join("first-intake.csv"), report["first_intake"]) and saved
+			saved = _write_records(output.path_join("forage-diagnostics.csv"), report["forage_diagnostics"]) and saved
+			saved = _write_records(output.path_join("forage-samples.csv"), report["forage_samples"]) and saved
+			saved = _write_records(output.path_join("forage-events.csv"), report["forage_events"]) and saved
+			saved = _write_records(output.path_join("forage-terminal-context.csv"), report["forage_terminal_context"]) and saved
 	print(JSON.stringify({"protocol": report["protocol"], "seed": report["seed"], "sheep": sheep_count,
 		"production_backend_valid": valid_backend, "outcomes": report["outcomes"], "behavior_case": behavior_case,
 		"target_invalidation": report.get("target_invalidation", {}), "output": output}))

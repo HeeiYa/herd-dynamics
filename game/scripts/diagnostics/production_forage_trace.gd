@@ -21,6 +21,7 @@ var eating_usec: int = -1
 var food_eaten: float = 0.0
 var first_intake: Dictionary = {}
 var terminal: Dictionary = {}
+var diagnostics := ProductionForageDiagnostics.new()
 
 func to_dictionary(minimum_net_pixels: float) -> Dictionary:
 	return {"handle": handle.key(), "eligible_tick": eligible_tick, "eligible_usec": eligible_usec,

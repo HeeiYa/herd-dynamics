@@ -76,6 +76,7 @@ func observe_step_start(world: SimulationWorld) -> void:
 		for dense: int in world.store.count:
 			var record := ProductionForageTrace.new()
 			record.handle = world.store.handle_at(dense)
+			record.diagnostics.detailed = _records.size() < ProductionForageDiagnostics.MAX_DETAILED_LIVES
 			_records.append(record)
 		assert(_records.size() == _sheep_count)
 	for record: ProductionForageTrace in _records:
@@ -86,6 +87,7 @@ func observe_step_start(world: SimulationWorld) -> void:
 		if world.tick < DROUGHT_EFFECTIVE_TICK:
 			continue
 		_observe_food_opportunity(record)
+		record.diagnostics.begin_step(world, record)
 	observer_usec += Time.get_ticks_usec() - started
 
 func _observe_food_opportunity(record: ProductionForageTrace) -> void:
@@ -122,6 +124,8 @@ func after_step(world: SimulationWorld) -> void:
 		var position: Vector2 = world.store.position_current[dense]
 		if record.eligible_tick >= 0:
 			_observe_migration(record, context, intent, position, world.store.hunger[dense], tick)
+		if tick >= DROUGHT_EFFECTIVE_TICK:
+			record.diagnostics.end_step(world, record, context, intent, tick)
 		if world.tick == END_TICK:
 			record.terminal = {"handle": record.handle.key(), "tick": tick, "position_x": position.x,
 				"position_y": position.y, "hunger": world.store.hunger[dense],
@@ -195,6 +199,10 @@ func finish_report() -> Dictionary:
 	var records: Array[Dictionary] = []
 	var terminal: Array[Dictionary] = []
 	var first_intake: Array[Dictionary] = []
+	var diagnostics: Array[Dictionary] = []
+	var diagnostic_samples: Array[Dictionary] = []
+	var diagnostic_events: Array[Dictionary] = []
+	var diagnostic_terminal: Array[Dictionary] = []
 	var outcome: Dictionary = {"case": "forage_empty_control" if empty_control else "forage_migration",
 		"cohort": _records.size(), "eligible": 0, "never_eligible": 0, "search_decision": 0,
 		"search_motion": 0, "left_dry_region": 0, "real_intake": 0, "migration_completed": 0,
@@ -203,6 +211,10 @@ func finish_report() -> Dictionary:
 		var row: Dictionary = record.to_dictionary(_world.config.agent_radius * 2.0)
 		records.append(row)
 		terminal.append(record.terminal.duplicate(true))
+		diagnostics.append(record.diagnostics.summary(record.handle))
+		diagnostic_samples.append_array(record.diagnostics.samples)
+		diagnostic_events.append_array(record.diagnostics.event_rows())
+		diagnostic_terminal.append(record.diagnostics.terminal)
 		if not record.first_intake.is_empty():
 			first_intake.append(record.first_intake.duplicate(true))
 		if record.eligible_tick < 0:
@@ -219,6 +231,10 @@ func finish_report() -> Dictionary:
 	var report: Dictionary = report_header(_world, "production-forage-migration-v1", _seed, _sheep_count, _started_usec)
 	report.merge({"case": outcome["case"], "outcomes": [outcome], "records": records, "terminal": terminal,
 		"quality": _quality.duplicate(true), "first_intake": first_intake, "empty_control": empty_control,
+		"forage_diagnostics_version": "forage-resource-evidence-v1",
+		"forage_diagnostics": diagnostics, "forage_samples": diagnostic_samples,
+		"forage_events": diagnostic_events, "forage_terminal_context": diagnostic_terminal,
+		"forage_diagnostics_scope": "Old opportunity/success columns are unchanged. Every life has exact post-drought aggregate counts and terminal context; only the first128 registered lives have <=34 periodic rows and the latest16 transition rows. Omitted events are counted. Resource amounts at n/n+1 use the existing pure snapshot API; cell food decrease includes other consumers. Transition tags are observed facts, not inferred BT exit reasons. Backoff changes expose the existing public retry deadline; no private task fields are read. Unexcluded local candidate is an independent read-only query, not reconstruction of the task's blocked-cell choice. Nonclosing ticks describe measured consecutive geometry, not the BT's internal six-pixel progress watermark. Observer cost is included and this run cannot establish unprobed capacity.",
 		"drought": {"requested_tick": DROUGHT_REQUEST_TICK, "effective_tick": DROUGHT_EFFECTIVE_TICK,
 			"region": [_dry_region.position.x, _dry_region.position.y, _dry_region.size.x, _dry_region.size.y],
 			"cells": Array(_depleted_cells), "food_removed": _depleted_food, "recovery_per_second": _world.config.grass_recovery_rate},
