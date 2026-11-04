@@ -31,7 +31,7 @@ var _pose_epoch: int = -1
 var _motion_completed_usec: int = 0
 var _previous_motion_completed_usec: int = 0
 var _pose_sample_count: int = 0
-var _behavior_probe: ProductionBehaviorProbe
+var _behavior_probe: ProductionBehaviorProtocol
 # Only a completed, primitive report crosses the mutex; the UI never sees probe/World.
 var _behavior_report: Dictionary = {}
 
@@ -218,10 +218,24 @@ func _setup_behavior_probe(world: SimulationWorld) -> void:
 	if not arguments.has("--benchmark=production-behavior"):
 		return
 	var sheep_count: int = 80
+	var behavior_case: String = "two-flocks"
 	for argument: String in arguments:
 		if argument.begins_with("--sheep="):
 			sheep_count = int(argument.trim_prefix("--sheep="))
-	_behavior_probe = ProductionBehaviorProbe.new()
+		elif argument.begins_with("--behavior-case="):
+			behavior_case = argument.trim_prefix("--behavior-case=")
+	match behavior_case:
+		"two-flocks":
+			_behavior_probe = ProductionBehaviorProbe.new()
+		"hunt-cooperation":
+			_behavior_probe = ProductionHuntProbe.new()
+		"forage-migration", "forage-empty":
+			var forage := ProductionForageProbe.new()
+			forage.empty_control = behavior_case == "forage-empty"
+			_behavior_probe = forage
+		_:
+			push_error("Unknown production behavior case: " + behavior_case)
+			return
 	_behavior_probe.setup(world, sheep_count, _initial.random_seed)
 
 func _finish_behavior_probe() -> void:

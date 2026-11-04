@@ -13,6 +13,11 @@ func _run() -> void:
 		if pair.size() == 2:
 			options[pair[0]] = pair[1]
 	var sheep_count: int = int(options.get("sheep", "80"))
+	var behavior_case: String = options.get("behavior-case", "two-flocks")
+	if behavior_case not in ["two-flocks", "hunt-cooperation", "forage-migration", "forage-empty"]:
+		push_error("Unknown production behavior case: " + behavior_case)
+		get_tree().quit(1)
+		return
 	if sheep_count < 8 or sheep_count > 1000:
 		push_error("Production behavior protocol accepts 8..1000 sheep; counts are not silently clamped.")
 		get_tree().quit(1)
@@ -27,6 +32,8 @@ func _run() -> void:
 	config.motion_backend = SimulationConfig.MotionBackend.GPU
 	config.worker_ai_budget_usec = 6000
 	config.instrument_enabled = false
+	if behavior_case in ["forage-migration", "forage-empty"]:
+		config.grass_recovery_rate = 0.0
 	var scenario := ScenarioConfig.new()
 	scenario.random_seed = int(options.get("seed", "42"))
 	scenario.sheep_count = 0
@@ -70,13 +77,23 @@ func _run() -> void:
 	var saved: bool = _write_json(output.path_join("summary.json"), report)
 	saved = _write_records(output.path_join("responses.csv"), report["records"]) and saved
 	saved = _write_records(output.path_join("quality.csv"), report["quality"]) and saved
-	saved = _write_records(output.path_join("sheep-terminal.csv"), report["sheep_terminal"]) and saved
-	saved = _write_records(output.path_join("sheep-recovery-v2.csv"), report["sheep_recovery_v2"]) and saved
-	saved = _write_records(output.path_join("exposure-episodes.csv"), report["exposure_episodes"]) and saved
-	saved = _write_records(output.path_join("dog-contexts.csv"), report["dog_contexts"]) and saved
-	saved = _write_records(output.path_join("dog-threats.csv"), report["dog_threats"]) and saved
+	if behavior_case == "two-flocks":
+		saved = _write_records(output.path_join("sheep-terminal.csv"), report["sheep_terminal"]) and saved
+		saved = _write_records(output.path_join("sheep-recovery-v2.csv"), report["sheep_recovery_v2"]) and saved
+		saved = _write_records(output.path_join("exposure-episodes.csv"), report["exposure_episodes"]) and saved
+		saved = _write_records(output.path_join("dog-contexts.csv"), report["dog_contexts"]) and saved
+		saved = _write_records(output.path_join("dog-threats.csv"), report["dog_threats"]) and saved
+	else:
+		saved = _write_records(output.path_join("terminal.csv"), report["terminal"]) and saved
+		if behavior_case == "hunt-cooperation":
+			saved = _write_records(output.path_join("roles.csv"), report["roles"]) and saved
+			saved = _write_records(output.path_join("hunt-contexts.csv"), report["samples"]) and saved
+			saved = _write_records(output.path_join("captures.csv"), report["captures"]) and saved
+		else:
+			saved = _write_records(output.path_join("first-intake.csv"), report["first_intake"]) and saved
 	print(JSON.stringify({"protocol": report["protocol"], "seed": report["seed"], "sheep": sheep_count,
-		"production_backend_valid": valid_backend, "outcomes": report["outcomes"], "target_invalidation": report["target_invalidation"], "output": output}))
+		"production_backend_valid": valid_backend, "outcomes": report["outcomes"], "behavior_case": behavior_case,
+		"target_invalidation": report.get("target_invalidation", {}), "output": output}))
 	_main.queue_free()
 	await get_tree().process_frame
 	get_tree().quit(0 if valid_backend and saved else 1)

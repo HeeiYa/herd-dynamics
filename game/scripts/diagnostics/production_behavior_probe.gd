@@ -1,5 +1,5 @@
 class_name ProductionBehaviorProbe
-extends RefCounted
+extends ProductionBehaviorProtocol
 ## Diagnostic fixture and observer owned exclusively by SimulationExecutor.
 ## All stimuli use ordinary stage-0 commands; trees and movement stay untouched.
 const THREAT_TICK: int = 240
@@ -10,9 +10,6 @@ const END_TICK: int = 1200
 const GROUP_CENTERS: Array[Vector2] = [Vector2(600, 700), Vector2(1800, 700)]
 const BODY_SPACING: float = 32.0
 
-var finished: bool = false
-var observer_usec: int = 0
-var observed_steps: int = 0
 var _world: SimulationWorld
 var _sheep_count: int
 var _seed: int
