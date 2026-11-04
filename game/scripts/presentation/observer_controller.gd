@@ -134,6 +134,10 @@ func _on_epoch_cleared() -> void:
 		_camera.show_overview(false, _zoom)
 
 func reset_scenario() -> void:
+	# Buttons do not take keyboard focus. Commit SpinBox text before reading
+	# values so the active edit is included without requiring focus loss.
+	for input: SpinBox in [hud.seed, hud.sheep, hud.wolves, hud.dogs]:
+		input.apply()
 	var scenario := ScenarioConfig.new()
 	scenario.layout = hud.layout.get_item_id(hud.layout.selected) as ScenarioConfig.Layout
 	scenario.random_seed = int(hud.seed.value)

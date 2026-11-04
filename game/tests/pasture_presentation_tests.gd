@@ -92,10 +92,16 @@ func _regenerate(size: Vector2, cell_size: float, coverage: float) -> void:
 	draft.initial_coverage = coverage
 	panel.apply_generation_draft(draft)
 	_check(_source.config.world_size != size, "Draft leaves current geometry unchanged")
-	_main.hud.sheep.value = 40
-	_main.hud.wolves.value = 4
-	_main.hud.dogs.value = 2
-	panel.regeneration_requested.emit()
+	_main.hud.tabs.current_tab = 2
+	if not _main.hud.panel_open:
+		_main.hud.toggle_panel()
+	_main.hud.seed.get_line_edit().text = "73"
+	_main.hud.sheep.value = 41
+	_main.hud.sheep.get_line_edit().text = "40"
+	_main.hud.wolves.get_line_edit().text = "4"
+	_main.hud.dogs.get_line_edit().text = "2"
+	_main.hud.sheep.get_line_edit().grab_focus()
+	(_main.hud.find_child("ResetScenario", true, false) as Button).pressed.emit()
 	await _until(func() -> bool: return _source.store.epoch > epoch, "Generation command acknowledged")
 	await process_frame
 	_check(_source.config.world_size == size and _main._camera._world_size == size, "Simulation and camera adopt the same bounds")
@@ -103,6 +109,7 @@ func _regenerate(size: Vector2, cell_size: float, coverage: float) -> void:
 	_check(ground._world_size == size and ground._image.get_size() == Vector2i(ceili(size.x / cell_size), ceili(size.y / cell_size)), "One texture texel represents each resource cell including cropped edges")
 	_check(_source.resources.columns == ceili(size.x / cell_size), "Published resources use the new resolution")
 	_check(panel.generation_draft().world_size == size, "Panel acknowledgement retains applied generation values")
+	_check(_source.scenario.random_seed == 73 and _source.scenario.sheep_count == 40 and _source.scenario.wolf_count == 4 and _source.scenario.dog_count == 2, "Reset commits typed initial conditions without focus loss")
 
 func _capture(suffix: String) -> void:
 	if not _main.hud.panel_open:
