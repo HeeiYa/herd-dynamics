@@ -6,6 +6,11 @@ func _tick(_delta: float) -> Status:
 		return FAILURE
 	var attempt_ticks: int = ai.config.attack_windup_ticks + ai.config.attack_window_ticks + ai.config.attack_cooldown_ticks
 	if context.current_tick >= entered_tick + attempt_ticks:
-		return SUCCESS
+		# Retrying is still the same running pursuit. SUCCESS would clear the
+		# movement intent until the next scheduled decision, abruptly stopping it.
+		# Replace the token and immutable intent in this one owner-thread update;
+		# Interaction still decides acceptance, windup, contact and cooldown.
+		token = context.new_token()
+		entered_tick = context.current_tick
 	write_intent(SimTypes.IntentMode.ATTACK, SimTypes.Behavior.ATTACK, context.prey.position, ai.settings.wolf_speed, "Attack token handed to interaction", context.prey.handle)
 	return RUNNING
