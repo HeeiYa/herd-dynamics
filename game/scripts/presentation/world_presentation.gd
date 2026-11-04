@@ -26,6 +26,9 @@ class Change extends RefCounted:
 	var tick: int
 	var action: int = -1
 	var direction: int = -1
+	# -2 means no cue change; -1 explicitly cancels the previous cue.
+	var cue_action: int = -2
+	var cue_started_tick: int = 0
 
 class DrawEntry extends RefCounted:
 	var handle: AgentHandle
@@ -49,6 +52,10 @@ class AnimationState extends RefCounted:
 	var started_tick: int = 0
 	var phase_ms: float = 0.0
 	var latest_position: Vector2 = Vector2.ZERO
+	var cue_action: int = -1
+	var cue_started_tick: int = 0
+	var latest_pose: PublishedPose
+	var pose_history: PublishedPose.History
 	var changes: Array[Change] = []
 	var drawing: DrawEntry = DrawEntry.new()
 
@@ -62,6 +69,8 @@ class CaptureVisual extends RefCounted:
 	var previous_started_tick: int = 0
 	var previous_direction: int = 0
 	var previous_phase_ms: float = 0.0
+	var previous_cue_action: int = -1
+	var previous_cue_started_tick: int = 0
 	var drawing: DrawEntry = DrawEntry.new()
 
 class SelectionOverlay extends Node2D:
@@ -93,6 +102,7 @@ var _seed: int = 42
 var _presentation_frame: int = 0
 var _incremental_sort_active: bool = false
 var _instance_animator: InstanceAnimator
+var _visual_sample := AnimationCatalog.VisualSample.new()
 
 func _init(instrumentation: Probes = null) -> void:
 	probes = instrumentation if instrumentation != null else Probes.new()
@@ -175,58 +185,56 @@ func observe_published(tick: int) -> void:
 		var handle: AgentHandle = _store.handle_at(dense)
 		var state: AnimationState = _states[handle.slot]
 		var intent: MotionIntent = _intents.get_intent(handle, maxi(0, tick - 1))
-		var behavior: int = SimTypes.Behavior.IDLE
-		var pressure: bool = false
-		if intent != null:
-			behavior = intent.behavior
-			pressure = intent.mode == SimTypes.IntentMode.PRESSURE
 		var moving: bool = _store.velocity_current[dense].length_squared() > 9.0
-		var action: int = AnimationCatalog.action_for(_store.species[dense], behavior, moving, pressure)
 		if state == null or not state.handle.same_life(handle):
-			state = _new_state(handle, action, _store.facing[dense], maxi(0, tick - 1))
-			state.latest_behavior = behavior
+			state = AnimationState.new()
+			state.handle = handle
+			state.drawing.handle = handle
+			state.pose_history = PublishedPose.History.new()
+			var first: PublishedPose = PublishedPose.sample(handle, _store.species[dense], intent, moving, _store.facing[dense], tick, null, state.pose_history)
+			state.action = first.action
+			state.latest_action = first.action
+			state.direction = first.direction
+			state.latest_direction = first.direction
+			state.started_tick = first.started_tick
+			state.phase_ms = _phase_for(handle, first.action, first.phase_direction)
+			state.latest_behavior = first.behavior
+			state.latest_pose = first
 			_states[handle.slot] = state
 			# A life first seen mid-behavior (its decision ran before the first
 			# publication) still reports that transition once, from IDLE.
-			if behavior != SimTypes.Behavior.IDLE:
-				behavior_changed.emit(handle, _store.species[dense], SimTypes.Behavior.IDLE, behavior, maxi(0, tick - 1))
-		elif behavior != state.latest_behavior:
-			var previous_behavior: int = state.latest_behavior
-			state.latest_behavior = behavior
-			# Decisions made at n drive the interval [n, n+1].
-			behavior_changed.emit(handle, _store.species[dense], previous_behavior, behavior, maxi(0, tick - 1))
-		_record_changes(state, action, _store.facing[dense], tick)
+			if first.behavior != SimTypes.Behavior.IDLE:
+				behavior_changed.emit(handle, _store.species[dense], SimTypes.Behavior.IDLE, first.behavior, maxi(0, tick - 1))
+		else:
+			var pose: PublishedPose = PublishedPose.sample(handle, _store.species[dense], intent, moving, _store.facing[dense], tick, state.latest_pose, state.pose_history)
+			_record_changes(state, pose, tick)
+			if pose.behavior != state.latest_behavior:
+				behavior_changed.emit(handle, _store.species[dense], state.latest_behavior, pose.behavior, maxi(0, tick - 1))
+			state.latest_behavior = pose.behavior
+			state.latest_pose = pose
 		state.latest_position = _store.position_current[dense]
 	if probes.enabled:
 		probes.record(Probes.Tag.VISUAL_PUBLISH, Time.get_ticks_usec() - started_usec)
 
-func _new_state(handle: AgentHandle, action: int, facing: Vector2, tick: int) -> AnimationState:
-	var state := AnimationState.new()
-	state.handle = handle
-	state.drawing.handle = handle
-	state.action = action
-	state.latest_action = action
-	state.direction = AnimationCatalog.direction_for(facing, 0)
-	state.latest_direction = state.direction
-	state.started_tick = tick
-	state.phase_ms = _phase_for(handle, action, state.direction)
-	return state
-
-func _record_changes(state: AnimationState, action: int, facing: Vector2, tick: int) -> void:
-	if action != state.latest_action:
+func _record_changes(state: AnimationState, pose: PublishedPose, tick: int) -> void:
+	var cue_changed: bool = pose.cue_action != state.latest_pose.cue_action or pose.cue_started_tick != state.latest_pose.cue_started_tick
+	if pose.action != state.latest_action or cue_changed:
 		var change := Change.new()
 		# Decisions made at n drive movement over [n,n+1].
 		change.tick = maxi(0, tick - 1)
-		change.action = action
+		if pose.action != state.latest_action:
+			change.action = pose.action
+		if cue_changed:
+			change.cue_action = pose.cue_action
+			change.cue_started_tick = pose.cue_started_tick
 		state.changes.append(change)
-		state.latest_action = action
-	var direction: int = AnimationCatalog.direction_for(facing, state.latest_direction)
-	if direction != state.latest_direction:
+		state.latest_action = pose.action
+	if pose.direction != state.latest_direction:
 		var change := Change.new()
 		change.tick = tick
-		change.direction = direction
+		change.direction = pose.direction
 		state.changes.append(change)
-		state.latest_direction = direction
+		state.latest_direction = pose.direction
 
 func _phase_for(handle: AgentHandle, action: int, direction: int) -> float:
 	return phase_for_seed(handle, action, direction, _seed)
@@ -248,6 +256,9 @@ func _advance_state(state: AnimationState, display_tick: float) -> void:
 			state.phase_ms = _phase_for(state.handle, state.action, state.direction)
 		if change.direction >= 0:
 			state.direction = change.direction
+		if change.cue_action >= -1:
+			state.cue_action = change.cue_action
+			state.cue_started_tick = change.cue_started_tick
 
 func present(tick: int, alpha: float, direct: bool = false) -> void:
 	if _store == null:
@@ -281,7 +292,8 @@ func present(tick: int, alpha: float, direct: bool = false) -> void:
 		if not direct:
 			foot = _store.position_previous[dense].lerp(foot, interpolation)
 		var elapsed_ms: float = (display_tick - state.started_tick) * _config.fixed_dt * 1000.0 + state.phase_ms
-		_prepare_drawing(state.drawing, foot, state.action, state.direction, elapsed_ms)
+		var cue_elapsed_ms: float = (display_tick - state.cue_started_tick) * _config.fixed_dt * 1000.0
+		prepare_timeline_drawing(state.drawing, foot, state.action, state.direction, elapsed_ms, state.cue_action, cue_elapsed_ms, _config)
 		if state.drawing.area.intersects(visible_world):
 			_queue_drawing(state.drawing)
 			visible_count += 1
@@ -315,6 +327,12 @@ func present(tick: int, alpha: float, direct: bool = false) -> void:
 
 func _prepare_drawing(entry: DrawEntry, foot: Vector2, action: int, direction: int, elapsed_ms: float) -> void:
 	prepare_snapshot_drawing(entry, foot, action, direction, elapsed_ms, _config)
+
+## Shared CPU/GPU and inline/worker clock resolution. Scratch never escapes
+## this synchronous main-thread call; only completed values enter DrawEntry.
+func prepare_timeline_drawing(entry: DrawEntry, foot: Vector2, action: int, direction: int, elapsed_ms: float, cue_action: int, cue_elapsed_ms: float, config: SimulationConfig) -> void:
+	_catalog.resolve_visual(_visual_sample, action, direction, elapsed_ms, cue_action, cue_elapsed_ms)
+	prepare_snapshot_drawing(entry, foot, _visual_sample.action, direction, _visual_sample.elapsed_ms, config)
 
 func prepare_snapshot_drawing(entry: DrawEntry, foot: Vector2, action: int, direction: int, elapsed_ms: float, config: SimulationConfig) -> void:
 	var clip: AnimationCatalog.Clip = _catalog.get_clip(action, direction)
@@ -481,6 +499,8 @@ func add_capture(handle: AgentHandle, position: Vector2, facing: Vector2, tick: 
 			visual.previous_action = state.action
 			visual.previous_started_tick = state.started_tick
 			visual.previous_phase_ms = state.phase_ms
+			visual.previous_cue_action = state.cue_action
+			visual.previous_cue_started_tick = state.cue_started_tick
 	_captures.append(visual)
 
 func _append_captures(display_tick: float, visible_world: Rect2) -> void:
@@ -496,7 +516,8 @@ func _append_captures(display_tick: float, visible_world: Rect2) -> void:
 			var alpha: float = clampf(display_tick - visual.started_tick + 1.0, 0.0, 1.0)
 			var foot: Vector2 = visual.previous_position.lerp(visual.position, alpha)
 			var previous_ms: float = (display_tick - visual.previous_started_tick) * _config.fixed_dt * 1000.0 + visual.previous_phase_ms
-			_prepare_drawing(visual.drawing, foot, visual.previous_action, visual.previous_direction, previous_ms)
+			var cue_ms: float = (display_tick - visual.previous_cue_started_tick) * _config.fixed_dt * 1000.0
+			prepare_timeline_drawing(visual.drawing, foot, visual.previous_action, visual.previous_direction, previous_ms, visual.previous_cue_action, cue_ms, _config)
 		else:
 			_prepare_drawing(visual.drawing, visual.position, AnimationCatalog.Action.SHEEP_CAPTURED, visual.direction, elapsed_ms)
 		visual.drawing.tint.a = clampf((lifetime_ms - elapsed_ms) / 400.0, 0.0, 1.0)
@@ -545,6 +566,8 @@ func reliable_captures(snapshot: SimulationPublication, at_tick: float) -> Array
 			visual.previous_direction = pose.direction
 			visual.previous_started_tick = pose.started_tick
 			visual.previous_phase_ms = phase_for_seed(pose.handle, pose.action, pose.phase_direction, snapshot.scenario.random_seed)
+			visual.previous_cue_action = pose.cue_action
+			visual.previous_cue_started_tick = pose.cue_started_tick
 		var lifetime_ms: float = _catalog.get_clip(AnimationCatalog.Action.SHEEP_CAPTURED, visual.direction).duration_ms + 900.0
 		if (at_tick - visual.started_tick) * snapshot.config.fixed_dt * 1000.0 < lifetime_ms:
 			_captures.append(visual)

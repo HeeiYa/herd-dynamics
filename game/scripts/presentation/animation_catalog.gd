@@ -40,6 +40,11 @@ class Clip extends RefCounted:
 				return rectangles[index]
 		return rectangles.back()
 
+## Reused main-thread scratch. Resolving a cue never allocates per body/frame.
+class VisualSample extends RefCounted:
+	var action: int
+	var elapsed_ms: float
+
 var texture: Texture2D
 var clips: Array[Clip] = []
 
@@ -72,6 +77,33 @@ func load_assets() -> void:
 
 func get_clip(action: int, direction: int) -> Clip:
 	return clips[action * DIRECTIONS.size() + direction]
+
+## A cue temporarily covers a continuing base clock. Even a looping authored
+## clip gets only one duration here; skipped windows are never replayed.
+func resolve_visual(sample: VisualSample, action: int, direction: int, elapsed_ms: float, cue_action: int, cue_elapsed_ms: float) -> void:
+	sample.action = action
+	sample.elapsed_ms = elapsed_ms
+	if cue_action >= 0 and cue_elapsed_ms >= 0.0 and cue_elapsed_ms < get_clip(cue_action, direction).duration_ms:
+		sample.action = cue_action
+		sample.elapsed_ms = cue_elapsed_ms
+
+## Only published, still-valid intent edges are visual evidence. The caller
+## supplies an existing life; birth, missing intent and token renewal are not edges.
+static func cue_for(species: int, previous_behavior: int, behavior: int, previous_action: int, action: int, moving: bool) -> int:
+	match species:
+		SimTypes.Species.SHEEP:
+			if behavior == SimTypes.Behavior.FLEE and previous_behavior != SimTypes.Behavior.FLEE:
+				return Action.SHEEP_STARTLE
+			if previous_behavior == SimTypes.Behavior.FLEE and behavior in [SimTypes.Behavior.IDLE, SimTypes.Behavior.GRAZE] and not moving:
+				return Action.SHEEP_RECOVER
+		SimTypes.Species.DOG:
+			var was_intercepting: bool = previous_behavior == SimTypes.Behavior.INTERCEPT or previous_action == Action.DOG_PRESSURE
+			var intercepting: bool = behavior == SimTypes.Behavior.INTERCEPT or action == Action.DOG_PRESSURE
+			if intercepting and not was_intercepting:
+				return Action.DOG_BARK if action == Action.DOG_PRESSURE and not moving else Action.DOG_DETECT
+			if previous_behavior in [SimTypes.Behavior.INTERCEPT, SimTypes.Behavior.RETURN] and behavior == SimTypes.Behavior.GUARD and not moving:
+				return Action.DOG_RELAX
+	return -1
 
 static func direction_for(facing: Vector2, previous: int) -> int:
 	if facing.length_squared() < 0.01:

@@ -101,6 +101,8 @@ func _body() -> void:
 	state.action = pose.action
 	state.direction = pose.previous_direction if display_tick < pose.direction_tick else pose.direction
 	state.started_tick = pose.started_tick
+	state.cue_action = pose.cue_action
+	state.cue_started_tick = pose.cue_started_tick
 	state.latest_position = source.store.position_current[dense]
 	state.drawing.handle = pose.handle
 	state.drawing.tint = Color.WHITE
@@ -110,7 +112,8 @@ func _body() -> void:
 		held_count += 1
 		return
 	var milliseconds: float = (display_tick - state.started_tick) * source.config.fixed_dt * 1000.0 + state.phase_ms
-	_view.prepare_snapshot_drawing(state.drawing, foot, state.action, state.direction, milliseconds, source.config)
+	var cue_ms: float = (display_tick - state.cue_started_tick) * source.config.fixed_dt * 1000.0
+	_view.prepare_timeline_drawing(state.drawing, foot, state.action, state.direction, milliseconds, state.cue_action, cue_ms, source.config)
 	if state.drawing.area.intersects(_viewport):
 		_queue(state.drawing)
 		visible_count += 1
@@ -133,7 +136,8 @@ func _capture() -> void:
 	if elapsed < 0.0:
 		var foot: Vector2 = visual.previous_position.lerp(visual.position, clampf(display_tick - visual.started_tick + 1.0, 0.0, 1.0))
 		var previous_ms: float = (display_tick - visual.previous_started_tick) * source.config.fixed_dt * 1000.0 + visual.previous_phase_ms
-		_view.prepare_snapshot_drawing(entry, foot, visual.previous_action, visual.previous_direction, previous_ms, source.config)
+		var cue_ms: float = (display_tick - visual.previous_cue_started_tick) * source.config.fixed_dt * 1000.0
+		_view.prepare_timeline_drawing(entry, foot, visual.previous_action, visual.previous_direction, previous_ms, visual.previous_cue_action, cue_ms, source.config)
 	else:
 		_view.prepare_snapshot_drawing(entry, visual.position, AnimationCatalog.Action.SHEEP_CAPTURED, visual.direction, elapsed, source.config)
 	entry.tint.a = clampf((clip.duration_ms + 900.0 - elapsed) / 400.0, 0.0, 1.0)

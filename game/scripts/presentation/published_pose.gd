@@ -10,6 +10,10 @@ var previous_direction: int
 var direction_tick: int
 var started_tick: int
 var phase_direction: int
+var has_intent: bool = false
+var cue_action: int = -1
+var cue_started_tick: int = 0
+var cue_owner_token: int = 0
 
 ## Optional bounded diagnostic sample. Frozen after publication; timings include
 ## clock overhead and cover only sampled rows, never the entire pose pass.
@@ -60,10 +64,24 @@ static func sample(handle: AgentHandle, species: int, intent: MotionIntent, movi
 	var behavior: int = intent.behavior if intent != null else SimTypes.Behavior.IDLE
 	var pressure: bool = intent != null and intent.mode == SimTypes.IntentMode.PRESSURE
 	var action: int = AnimationCatalog.action_for(species, behavior, moving, pressure)
+	var continuing: bool = previous != null and previous.handle.same_life(handle)
+	var cue_action: int = -1
+	var cue_started_tick: int = 0
+	var cue_owner_token: int = 0
+	var has_intent: bool = intent != null
+	if continuing and has_intent and previous.has_intent:
+		if action != previous.action or behavior != previous.behavior:
+			cue_action = AnimationCatalog.cue_for(species, previous.behavior, behavior, previous.action, action, moving)
+		if cue_action >= 0:
+			cue_started_tick = maxi(0, tick - 1)
+			cue_owner_token = intent.owner_token
+		elif action == previous.action and behavior == previous.behavior and previous.cue_action >= 0 and intent.owner_token == previous.cue_owner_token:
+			cue_action = previous.cue_action
+			cue_started_tick = previous.cue_started_tick
+			cue_owner_token = previous.cue_owner_token
 	if profile != null:
 		profile.action_usec += Time.get_ticks_usec() - part_started
 		part_started = Time.get_ticks_usec()
-	var continuing: bool = previous != null and previous.handle.same_life(handle)
 	var direction: int = previous.direction if continuing else 0
 	# An unchanged facing has already settled into the previous octant. Cache
 	# the exact vector, not an approximate angle that could shift hysteresis.
@@ -72,7 +90,8 @@ static func sample(handle: AgentHandle, species: int, intent: MotionIntent, movi
 		history.sampled_facing = facing
 	if profile != null:
 		profile.direction_usec += Time.get_ticks_usec() - part_started
-	if continuing and action == previous.action and direction == previous.direction and behavior == previous.behavior:
+	var unchanged_cue: bool = continuing and cue_action == previous.cue_action and cue_started_tick == previous.cue_started_tick and cue_owner_token == previous.cue_owner_token
+	if continuing and action == previous.action and direction == previous.direction and behavior == previous.behavior and has_intent == previous.has_intent and unchanged_cue:
 		return previous
 	if profile != null:
 		profile.changed += 1
@@ -85,6 +104,10 @@ static func sample(handle: AgentHandle, species: int, intent: MotionIntent, movi
 	pose.species = species
 	pose.behavior = behavior
 	pose.action = action
+	pose.has_intent = has_intent
+	pose.cue_action = cue_action
+	pose.cue_started_tick = cue_started_tick
+	pose.cue_owner_token = cue_owner_token
 	pose.direction = direction
 	pose.direction_tick = tick
 	if not continuing:
