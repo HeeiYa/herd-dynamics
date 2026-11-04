@@ -83,6 +83,7 @@ func telemetry_copy() -> SimulationTelemetry:
 	result.pose_changed = pose_changed
 	result.pose_allocations = pose_allocations
 	result.pose_buffer_allocations = pose_buffer_allocations
+	result.pose_profile = pose_profile
 	result.ai_used_usec = ai_used_usec
 	result.phase_usec = phase_usec
 	result.active_agents = active_agents

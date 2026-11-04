@@ -4,6 +4,7 @@ extends RefCounted
 ## Locks exchange ownership only. UI never waits for a simulation step or GPU.
 const PUBLICATION_LIMIT: int = 8
 const COMMAND_LIMIT: int = 256
+enum WaitReason { BACKPRESSURE, CATCHUP_YIELD, IDLE }
 var _thread := Thread.new()
 var _mutex := Mutex.new()
 var _commands: Array[SimulationCommand] = []
@@ -29,13 +30,79 @@ var _pose_buffers: Array[PoseBuffer] = []
 var _pose_epoch: int = -1
 var _motion_completed_usec: int = 0
 var _previous_motion_completed_usec: int = 0
+var _pose_sample_count: int = 0
+
+# Diagnostic accumulators are updated/read under the mailbox mutex. Sampling
+# never borrows the live World. Totals span resets; epoch/tick label the latest
+# completed publication. GPU totals belong to that completed step endpoint.
+var _diagnostic_totals: Dictionary[String, int] = {
+	"backpressure_wait_count": 0, "backpressure_wait_usec": 0,
+	"catchup_yield_usec": 0, "idle_wait_usec": 0, "step_usec": 0,
+	"snapshot_usec": 0, "ai_used_usec": 0, "motion_usec": 0,
+	"interaction_usec": 0, "grid_usec": 0, "commands_usec": 0,
+	"coordination_usec": 0, "steps": 0, "publications": 0,
+}
+var _backpressure_started_usec: int = 0
+var _diagnostic_queue_peak: int = 0
+var _diagnostic_tick: int = 0
+var _diagnostic_epoch: int = 0
+var _diagnostic_completed_usec: int = 0
+var _diagnostic_motion: Dictionary = {}
 
 func start(config: SimulationConfig, scenario: ScenarioConfig) -> Error:
 	_config = config.duplicate() as SimulationConfig
 	_config.detached_ai = true
 	_config.ai_budget_usec = _config.worker_ai_budget_usec
 	_initial = scenario.duplicate(true) as ScenarioConfig
+	# Benchmark-only bounded timing, disabled in ordinary play and regressions.
+	for argument: String in OS.get_cmdline_user_args():
+		if argument.begins_with("--pose-samples="):
+			_pose_sample_count = clampi(int(argument.trim_prefix("--pose-samples=")), 0, 64)
 	return _thread.start(_run)
+
+## Called only at diagnostic window boundaries. An in-flight not-room sleep is
+## included up to read_usec, so a fully backpressured window cannot report zero.
+func diagnostic_counters(reset_queue_peak: bool = false) -> Dictionary:
+	_mutex.lock()
+	var now: int = Time.get_ticks_usec()
+	# A duplicate of the typed accumulator retains its int-only value type;
+	# copy into an untyped diagnostic boundary before adding nested metadata.
+	var result: Dictionary = {}
+	result.merge(_diagnostic_totals)
+	if _backpressure_started_usec > 0:
+		result["backpressure_wait_usec"] += now - _backpressure_started_usec
+	result["read_usec"] = now
+	result["completed_publication_usec"] = _diagnostic_completed_usec
+	result["epoch"] = _diagnostic_epoch
+	result["tick"] = _diagnostic_tick
+	result["queue_depth"] = _deliveries.size()
+	result["queue_peak"] = _diagnostic_queue_peak
+	result["motion_backend_metrics"] = _diagnostic_motion.duplicate(true)
+	result["pose_samples_per_publication"] = _pose_sample_count
+	if reset_queue_peak:
+		_diagnostic_queue_peak = _deliveries.size()
+	_mutex.unlock()
+	return result
+
+func _wait_one_millisecond(reason: WaitReason) -> void:
+	var started: int = Time.get_ticks_usec()
+	if reason == WaitReason.BACKPRESSURE:
+		_mutex.lock()
+		_backpressure_started_usec = started
+		_diagnostic_totals["backpressure_wait_count"] += 1
+		_mutex.unlock()
+	OS.delay_msec(1)
+	_mutex.lock()
+	var elapsed: int = Time.get_ticks_usec() - started
+	match reason:
+		WaitReason.BACKPRESSURE:
+			_diagnostic_totals["backpressure_wait_usec"] += elapsed
+			_backpressure_started_usec = 0
+		WaitReason.CATCHUP_YIELD:
+			_diagnostic_totals["catchup_yield_usec"] += elapsed
+		WaitReason.IDLE:
+			_diagnostic_totals["idle_wait_usec"] += elapsed
+	_mutex.unlock()
 
 func enqueue(command: SimulationCommand) -> bool:
 	_mutex.lock()
@@ -100,7 +167,7 @@ func _run() -> void:
 		if not room:
 			# Bounded backpressure retains ticks and reliable events. It never
 			# holds the mailbox lock or makes the frontend wait for this thread.
-			OS.delay_msec(1)
+			_wait_one_millisecond(WaitReason.BACKPRESSURE)
 			continue
 		if _single_steps > 0 or (not _paused and _accumulator_seconds >= _config.fixed_dt):
 			var started: int = Time.get_ticks_usec()
@@ -119,12 +186,12 @@ func _run() -> void:
 			consecutive_steps += 1
 			if consecutive_steps >= _config.max_catchup_steps:
 				consecutive_steps = 0
-				OS.delay_msec(1)
+				_wait_one_millisecond(WaitReason.CATCHUP_YIELD)
 		else:
 			if control_changed or not _notices.is_empty():
 				_publish(world, 0)
 			consecutive_steps = 0
-			OS.delay_msec(1)
+			_wait_one_millisecond(WaitReason.IDLE)
 	world.motion.close()
 	world.ai.reset()
 	world.free()
@@ -267,7 +334,18 @@ func _sample_poses(world: SimulationWorld, publication: SimulationPublication) -
 	var buffer: PoseBuffer = _acquire_pose_buffer(store.count, publication)
 	publication.pose_buffer = buffer
 	var observed_tick: int = maxi(0, world.tick - 1)
+	var sample_count: int = mini(_pose_sample_count, store.count)
+	var sample_index: int = 0
+	var next_sample: int = -1
+	if sample_count > 0:
+		publication.pose_profile = PublishedPose.SampleProfile.new()
+		# One sample from each equal population stratum. The offset rotates each
+		# publication to avoid repeatedly profiling the same first dense slots.
+		next_sample = _sequence % maxi(1, store.count / sample_count)
 	for dense: int in store.count:
+		var profile: PublishedPose.SampleProfile = publication.pose_profile if dense == next_sample else null
+		var row_started: int = Time.get_ticks_usec() if profile != null else 0
+		var part_started: int = row_started
 		var handle: AgentHandle = store.handle_at(dense)
 		var slot: int = handle.slot
 		var previous: PublishedPose = _poses[slot]
@@ -276,6 +354,9 @@ func _sample_poses(world: SimulationWorld, publication: SimulationPublication) -
 			history = PublishedPose.History.new()
 			_pose_histories[slot] = history
 		var intent: MotionIntent = world.intents.get_intent(handle, observed_tick)
+		if profile != null:
+			profile.lookup_usec += Time.get_ticks_usec() - part_started
+			part_started = Time.get_ticks_usec()
 		# One validated lookup serves both clocks: animation uses n-1; service
 		# quality counts expiration at n. Dense columns are valid in this phase.
 		if store.alive[dense] != 0 and store.held[dense] == 0:
@@ -283,7 +364,11 @@ func _sample_poses(world: SimulationWorld, publication: SimulationPublication) -
 			if intent == null or world.tick >= intent.expires_tick:
 				publication.missing_intents += 1
 		var moving: bool = store.velocity_current[dense].length_squared() > 9.0
-		var pose: PublishedPose = PublishedPose.sample(handle, store.species[dense], intent, moving, store.facing[dense], world.tick, previous, history)
+		if profile != null:
+			profile.quality_usec += Time.get_ticks_usec() - part_started
+		var pose: PublishedPose = PublishedPose.sample(handle, store.species[dense], intent, moving, store.facing[dense], world.tick, previous, history, profile)
+		if profile != null:
+			part_started = Time.get_ticks_usec()
 		if pose != previous:
 			publication.pose_changed += 1
 			publication.pose_allocations += int(history.allocated_on_acquire)
@@ -299,6 +384,17 @@ func _sample_poses(world: SimulationWorld, publication: SimulationPublication) -
 				_notices.append(notice)
 		_poses[slot] = pose
 		buffer.write(dense, pose)
+		if profile != null:
+			profile.notices_buffer_usec += Time.get_ticks_usec() - part_started
+			profile.total_usec += Time.get_ticks_usec() - row_started
+			profile.rows += 1
+			sample_index += 1
+			if sample_index < sample_count:
+				var stratum_start: int = sample_index * store.count / sample_count
+				var stratum_end: int = (sample_index + 1) * store.count / sample_count
+				next_sample = stratum_start + _sequence % maxi(1, stratum_end - stratum_start)
+			else:
+				next_sample = -1
 
 func _publish(world: SimulationWorld, step_usec: int, closing: bool = false) -> void:
 	var completed_usec: int = Time.get_ticks_usec()
@@ -327,10 +423,27 @@ func _publish(world: SimulationWorld, step_usec: int, closing: bool = false) -> 
 	delivery.notices = _notices
 	delivery.metrics = publication.telemetry_copy()
 	_notices = []
+	var motion_metrics: Dictionary = world.motion.backend_metrics()
 	_mutex.lock()
+	_diagnostic_totals["snapshot_usec"] += publication.snapshot_usec
+	_diagnostic_totals["publications"] += 1
+	if step_usec > 0:
+		_diagnostic_totals["steps"] += 1
+		_diagnostic_totals["step_usec"] += step_usec
+		_diagnostic_totals["ai_used_usec"] += world.ai.frame_used_usec
+		_diagnostic_totals["commands_usec"] += world.phase_usec[0]
+		_diagnostic_totals["coordination_usec"] += world.phase_usec[1]
+		_diagnostic_totals["grid_usec"] += world.phase_usec[2]
+		_diagnostic_totals["motion_usec"] += world.phase_usec[4]
+		_diagnostic_totals["interaction_usec"] += world.phase_usec[5]
+	_diagnostic_tick = world.tick
+	_diagnostic_epoch = world.store.epoch
+	_diagnostic_completed_usec = publication.published_usec
+	_diagnostic_motion = motion_metrics
 	# One final receipt-only publication may follow the full queue during close.
 	assert(_deliveries.size() < PUBLICATION_LIMIT or closing)
 	_deliveries.append(delivery)
+	_diagnostic_queue_peak = maxi(_diagnostic_queue_peak, _deliveries.size())
 	# Release an overwritten full state outside the mailbox lock. Destruction
 	# can walk many reference-counted records; input enqueue must not wait on it.
 	var replaced: SimulationPublication = _latest

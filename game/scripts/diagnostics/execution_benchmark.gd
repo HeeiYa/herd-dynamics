@@ -34,6 +34,7 @@ var _regeneration_usec: int = 0
 var _first_new_epoch_ms: float = -1.0
 var _population_ready_ms: float = -1.0
 var _regeneration_count: int = 0
+var _worker_counters_start: Dictionary = {}
 
 func _ready() -> void:
 	for argument: String in OS.get_cmdline_user_args():
@@ -105,6 +106,8 @@ func _run() -> void:
 		get_tree().quit(1)
 		return
 	_started_usec = Time.get_ticks_usec()
+	if worker:
+		_worker_counters_start = _access.executor.diagnostic_counters(true)
 	var start_tick: int = _access.tick
 	var start_counts: PackedInt32Array = _access.counts()
 	_sampling = true
@@ -217,10 +220,17 @@ func _run() -> void:
 		"reset_first_publication_ms": _first_new_epoch_ms, "reset_population_ready_ms": _population_ready_ms,
 		"regeneration_warning": "Whole-window tick/wall ratio is not valid across reset; derive post-generation throughput from epoch-labelled rows." if regenerate > 0 else "none",
 		"frontend_profile": sample_end["frontend_profile"],
+		"worker_counters_start": _worker_counters_start,
+		"worker_counters_end": sample_end["worker_counters"],
+		"worker_window": _worker_counter_difference(_worker_counters_start, sample_end["worker_counters"]),
+		"pose_samples_requested": clampi(int(_options.get("pose-samples", "0")), 0, 64),
+		"pose_sample_scope": "At most requested rows per publication; one rotating sample per equal dense stratum. Timings include clock overhead, are inside pose_us, and are not full-pass totals. Disabled by default.",
 		"limitations": "10ms independent deferred pulses measure main-loop dispatch, not hardware input latency. Per-step quality scans and in-memory CSV collection are included in workload. CSV files are written after sampling; optional observer logs are written during sampling. Worker snapshots add their own cost. Wall-budget AI is not deterministic."
 	}
 	_write_csv(output.path_join("frames.csv"), "elapsed_us,tick,frame_ms,frontend_cpu_ms,snapshot_age_ms,backlog_seconds,visible,epoch,population,render_build_us,sort_us,published_steps,gpu_render_ms,visual_publish_us,body_prepare_us,shadows_us,body_submit_us,observer_update_us,hud_refresh_us,event_us,prepare_us,commit_us,budget_overrun_us,display_sequence,delivered_sequence,skipped_states", _frames)
-	_write_csv(output.path_join("steps.csv"), "tick,step_us,snapshot_us,ai_used_us,active,missing_intents,max_perception_delay_ticks,max_decision_delay_ticks,motion_us,epoch,commands_us,coordination_us,grid_us,interaction_us,grass_food,perception_cells,motion_cells,pose_us,store_copy_usec,intent_copy_usec,resource_copy_usec,metadata_copy_usec,quality_usec,pose_changed,pose_allocations,pose_buffer_allocations", _steps)
+	var step_header: String = "tick,step_us,snapshot_us,ai_used_us,active,missing_intents,max_perception_delay_ticks,max_decision_delay_ticks,motion_us,epoch,commands_us,coordination_us,grid_us,interaction_us,grass_food,perception_cells,motion_cells,pose_us,store_copy_usec,intent_copy_usec,resource_copy_usec,metadata_copy_usec,quality_usec,pose_changed,pose_allocations,pose_buffer_allocations"
+	step_header += "," + ",".join(PublishedPose.SampleProfile.csv_columns())
+	_write_csv(output.path_join("steps.csv"), step_header, _steps)
 	_write_csv(output.path_join("pulses.csv"), "sent_us,received_us,dispatch_ms", _pulses)
 	_write_csv(output.path_join("receipts.csv"), "request_id,submitted_us,completed_us,delivered_us,accepted,reason", _receipts)
 	_write_csv(output.path_join("faults.csv"), "submitted_us,inline_finished_us,duration_ms,busy", _faults)
@@ -235,13 +245,41 @@ func _run() -> void:
 
 func _finish_sampling(runner: SimulationRunner) -> Dictionary:
 	_sampling = false
+	var worker_counters: Dictionary = _access.executor.diagnostic_counters() if _access.executor != null else {}
 	return {
 		"elapsed_seconds": float(Time.get_ticks_usec() - _started_usec) / 1000000.0,
 		"tick": _access.tick, "counts": Array(_access.counts()), "captures": _access.capture_count,
 		"display_commits": runner.committed_frames, "skipped_states": _access.skipped_states,
 		"skipped_display_states": runner.skipped_display_states,
 		"frontend_profile": _access.probes.summary(),
+		"worker_counters": worker_counters,
 	}
+
+func _worker_counter_difference(first: Dictionary, last: Dictionary) -> Dictionary:
+	if first.is_empty() or last.is_empty():
+		return {}
+	var result: Dictionary = {}
+	for key: String in ["backpressure_wait_count", "backpressure_wait_usec", "catchup_yield_usec", "idle_wait_usec", "step_usec", "snapshot_usec", "ai_used_usec", "motion_usec", "interaction_usec", "grid_usec", "commands_usec", "coordination_usec", "steps", "publications"]:
+		result[key] = int(last[key]) - int(first[key])
+	result["wall_usec"] = int(last["read_usec"]) - int(first["read_usec"])
+	result["queue_peak"] = last["queue_peak"]
+	result["start_tick"] = first["tick"]
+	result["end_tick"] = last["tick"]
+	result["same_epoch"] = first["epoch"] == last["epoch"]
+	result["simulation_seconds_per_wall_second"] = float(result["steps"]) * _access.config.fixed_dt * 1000000.0 / maxf(1.0, float(result["wall_usec"]))
+	var first_motion: Dictionary = first["motion_backend_metrics"]
+	var last_motion: Dictionary = last["motion_backend_metrics"]
+	var motion: Dictionary = {}
+	for key: String in ["steps", "pack_us", "upload_us", "submit_wait_us", "readback_us", "commit_us", "gpu_timestamp_us", "gpu_timestamp_samples", "uploaded_bytes", "identity_cache_rebuilds"]:
+		if first_motion.get(key) == null or last_motion.get(key) == null:
+			motion[key] = null
+		elif key == "gpu_timestamp_us":
+			motion[key] = float(last_motion[key]) - float(first_motion[key])
+		else:
+			motion[key] = int(last_motion[key]) - int(first_motion[key])
+	result["motion_backend"] = motion
+	result["scope"] = "Mutex snapshots at sampling boundaries, independent of delivery/display. Completed-step totals may straddle one step at either endpoint; ongoing backpressure sleep is included through read_usec. AI includes coordination; all phases are inside step. GPU host timings are inside motion, GPU timestamps may be null. Queue peak was reset at start; counters span epochs but motion reset may invalidate GPU deltas."
+	return result
 
 func _produce_pulses() -> void:
 	while true:
@@ -284,6 +322,7 @@ func _inject_fault(worker: bool, milliseconds: int, busy: bool) -> void:
 func _on_publication(snapshot: SimulationTelemetry) -> void:
 	if _sampling and snapshot.step_usec > 0:
 		_steps.append(PackedStringArray([str(snapshot.tick), str(snapshot.step_usec), str(snapshot.snapshot_usec), str(snapshot.ai_used_usec), str(snapshot.active_agents), str(snapshot.missing_intents), str(snapshot.max_perception_delay_ticks), str(snapshot.max_decision_delay_ticks), str(snapshot.phase_usec[4]), str(snapshot.epoch), str(snapshot.phase_usec[0]), str(snapshot.phase_usec[1]), str(snapshot.phase_usec[2]), str(snapshot.phase_usec[5]), str(snapshot.grass_consumed), str(snapshot.perception_cells), str(snapshot.motion_cells), str(snapshot.pose_usec), str(snapshot.store_copy_usec), str(snapshot.intent_copy_usec), str(snapshot.resource_copy_usec), str(snapshot.metadata_copy_usec), str(snapshot.quality_usec), str(snapshot.pose_changed), str(snapshot.pose_allocations), str(snapshot.pose_buffer_allocations)]))
+		_append_pose_sample(_steps.size() - 1, snapshot.pose_profile)
 
 func _on_inline_step(elapsed_usec: int) -> void:
 	if not _sampling:
@@ -297,6 +336,16 @@ func _on_inline_step(elapsed_usec: int) -> void:
 			active += 1
 			missing += int(world.intents.get_intent(handle, world.tick) == null)
 	_steps.append(PackedStringArray([str(world.tick), str(elapsed_usec), "0", str(world.ai.frame_used_usec), str(active), str(missing), str(world.ai.max_perception_delay_ticks), str(world.ai.max_decision_delay_ticks), str(world.phase_usec[4]), str(world.store.epoch), str(world.phase_usec[0]), str(world.phase_usec[1]), str(world.phase_usec[2]), str(world.phase_usec[5]), str(world.interaction.grass_consumed), str(world.grid.cell_map.storage_count), str(world.motion._crowd_field.cell_map.storage_count), "0", "0", "0", "0", "0", "0", "0", "0", "0"]))
+	_append_pose_sample(_steps.size() - 1, null)
+
+func _append_pose_sample(row_index: int, profile: PublishedPose.SampleProfile) -> void:
+	var row: PackedStringArray = _steps[row_index]
+	if profile != null:
+		row.append_array(profile.csv_values())
+	else:
+		for column: String in PublishedPose.SampleProfile.csv_columns():
+			row.append("0")
+	_steps[row_index] = row
 
 func _regenerate(sheep_count: int) -> void:
 	_regeneration_count = sheep_count + int(_main.hud.wolves.value) + int(_main.hud.dogs.value)

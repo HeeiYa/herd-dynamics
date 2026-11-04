@@ -55,6 +55,8 @@ func _run() -> void:
 	_check(quality[SimTypes.Species.SHEEP]["never_perceived"] >= 1, "Unserved lives remain explicit in the quality result")
 	_check(quality[SimTypes.Species.SHEEP]["missing_or_expired_intent"] >= 1, "Missing intents are counted instead of omitted")
 	_check_receipt_drain_window(world, runner)
+	_check_pose_sample_bound(world)
+	await _check_worker_backpressure_window()
 	benchmark.free()
 	runner.queue_free()
 	view.queue_free()
@@ -62,6 +64,69 @@ func _run() -> void:
 	await process_frame
 	print("MEASUREMENT_TESTS checks=%d failures=%d" % [_checks, _failures])
 	quit(0 if _failures == 0 else 1)
+
+func _check_pose_sample_bound(world: SimulationWorld) -> void:
+	var executor := SimulationExecutor.new()
+	var unprofiled := SimulationPublication.new()
+	executor._sample_poses(world, unprofiled)
+	_check(unprofiled.pose_profile == null, "Ordinary publication performs no per-row clock sampling")
+	executor._pose_sample_count = 2
+	var sampled := SimulationPublication.new()
+	executor._sample_poses(world, sampled)
+	_check(sampled.pose_profile.rows == 2 and sampled.pose_profile.changed == 0, "Bounded sample does not change unchanged pose reuse")
+	_check(sampled.pose_profile.total_usec >= sampled.pose_profile.pool_usec + sampled.pose_profile.action_usec + sampled.pose_profile.direction_usec, "Nested sampled phases remain inside their sampled row total")
+	_check(sampled.pose_profile.csv_values().size() == PublishedPose.SampleProfile.csv_columns().size(), "Diagnostic CSV sample values align with named columns")
+	for dense: int in world.store.count:
+		_check(sampled.pose_at(dense) == unprofiled.pose_at(dense), "Optional timing preserves the exact immutable pose result")
+	var plain_history := PublishedPose.History.new()
+	var timed_history := PublishedPose.History.new()
+	var plain_previous: PublishedPose
+	var timed_previous: PublishedPose
+	var profile := PublishedPose.SampleProfile.new()
+	var handle: AgentHandle = world.store.handle_at(0)
+	for index: int in 64:
+		var intent := MotionIntent.new()
+		intent.behavior = SimTypes.Behavior.FLEE if index % 3 == 0 else SimTypes.Behavior.IDLE
+		var facing: Vector2 = Vector2.from_angle(float(index / 2) * 0.1)
+		var moving: bool = index % 5 != 0
+		plain_previous = PublishedPose.sample(handle, SimTypes.Species.SHEEP, intent, moving, facing, index, plain_previous, plain_history)
+		timed_previous = PublishedPose.sample(handle, SimTypes.Species.SHEEP, intent, moving, facing, index, timed_previous, timed_history, profile)
+		_check(plain_previous.action == timed_previous.action and plain_previous.behavior == timed_previous.behavior and plain_previous.direction == timed_previous.direction and plain_previous.previous_direction == timed_previous.previous_direction and plain_previous.direction_tick == timed_previous.direction_tick and plain_previous.started_tick == timed_previous.started_tick and plain_previous.phase_direction == timed_previous.phase_direction, "Timing preserves action changes, direction hysteresis, pooling and clocks")
+	_check(profile.changed > 0, "Sampled equivalence fixture exercises the changed-record path")
+
+func _check_worker_backpressure_window() -> void:
+	var config := SimulationConfig.new()
+	var scenario := ScenarioConfig.new()
+	scenario.sheep_count = 1
+	scenario.wolf_count = 0
+	scenario.dog_count = 0
+	var executor := SimulationExecutor.new()
+	var started: Error = executor.start(config, scenario)
+	_check(started == OK, "Backpressure measurement fixture starts a detached CPU worker")
+	if started != OK:
+		return
+	var deadline: int = Time.get_ticks_usec() + 3000000
+	var before: Dictionary = executor.diagnostic_counters(true)
+	while int(before["queue_depth"]) < SimulationExecutor.PUBLICATION_LIMIT and Time.get_ticks_usec() < deadline:
+		await process_frame
+		before = executor.diagnostic_counters(true)
+	_check(int(before["queue_depth"]) == SimulationExecutor.PUBLICATION_LIMIT, "Stalled consumer fills the reliable queue")
+	OS.delay_msec(30)
+	var after: Dictionary = executor.diagnostic_counters()
+	_check(int(after["steps"]) == int(before["steps"]), "Full reliable queue blocks further world steps")
+	_check(int(after["backpressure_wait_count"]) > int(before["backpressure_wait_count"]), "Backpressure count increases without a new publication")
+	_check(int(after["backpressure_wait_usec"]) - int(before["backpressure_wait_usec"]) >= 20000, "Boundary counters include actual wait time even without delivered telemetry")
+	_check(int(after["queue_peak"]) == SimulationExecutor.PUBLICATION_LIMIT, "Queue high-water measurement is available independently of display")
+	after["steps"] = -100
+	_check(int(executor.diagnostic_counters()["steps"]) >= 0, "Counter snapshots cannot mutate worker accumulators")
+	for delivery_index: int in SimulationExecutor.PUBLICATION_LIMIT:
+		executor.poll_delivery()
+	var previous_steps: int = int(before["steps"])
+	deadline = Time.get_ticks_usec() + 2000000
+	while int(executor.diagnostic_counters()["steps"]) <= previous_steps and Time.get_ticks_usec() < deadline:
+		await process_frame
+	_check(int(executor.diagnostic_counters()["steps"]) > previous_steps, "Worker resumes after the reliable consumer drains the queue")
+	executor.close()
 
 func _check_receipt_drain_window(world: SimulationWorld, runner: SimulationRunner) -> void:
 	var benchmark := ExecutionBenchmark.new()

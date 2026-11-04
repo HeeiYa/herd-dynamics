@@ -32,3 +32,4 @@ var quality_usec: int = 0
 var pose_changed: int = 0
 var pose_allocations: int = 0
 var pose_buffer_allocations: int = 0
+var pose_profile: PublishedPose.SampleProfile
