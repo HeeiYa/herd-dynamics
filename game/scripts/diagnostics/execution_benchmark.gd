@@ -351,7 +351,10 @@ func _regenerate(sheep_count: int) -> void:
 	_regeneration_count = sheep_count + int(_main.hud.wolves.value) + int(_main.hud.dogs.value)
 	_regeneration_epoch = _access.store.epoch + 1
 	_regeneration_usec = Time.get_ticks_usec()
-	_main.hud.sheep.value = sheep_count
+	# Exercise the actual text-edit path. SpinBox updates displayed text after
+	# a programmatic value assignment on a later frame; applying it immediately
+	# would otherwise restore the old text instead of this requested population.
+	_main.hud.sheep.get_line_edit().text = str(sheep_count)
 	var started: int = Time.get_ticks_usec()
 	# Same callback as the scene panel's generation button; the timer covers
 	# submission, while epoch-labelled frames cover planning and staged births.
