@@ -201,7 +201,10 @@ func _test_visible_to_memory_transition() -> void:
 	config.ai_budget_usec = 100000
 	var ai: AICoordinator = _new_ai(store, config)
 	var wolf: AgentHandle = store.create_agent(SimTypes.Species.WOLF, Vector2(100, 100))
-	var prey: AgentHandle = store.create_agent(SimTypes.Species.SHEEP, Vector2(150, 100))
+	# Exercise hunt ownership outside the higher-priority melee approach branch.
+	var approach_distance: float = config.agent_radius * 2.0 + config.attack_range + ai.settings.attack_approach_margin
+	var prey_position := Vector2(100.0 + approach_distance + 20.0, 100.0)
+	var prey: AgentHandle = store.create_agent(SimTypes.Species.SHEEP, prey_position)
 	ai.register_agent(wolf, 0)
 	ai.register_agent(prey, 0)
 	await process_frame
@@ -237,8 +240,8 @@ func _test_visible_to_memory_transition() -> void:
 	var memory_intent: MotionIntent = ai.intents.get_intent(wolf, 7)
 	_check(context.task_name == &"search_memory" and memory_intent != null and memory_intent.behavior == SimTypes.Behavior.SEARCH, "Lost sight switches to the explicit memory-search branch")
 	_check(ai.coordination.get_lease(wolf, 7) == null, "Memory search releases the previous hunt lease")
-	_check(memory_intent != null and memory_intent.destination.distance_to(Vector2(150, 100)) <= ai.settings.max_prediction_distance, "Search uses the last sighting instead of the target's unseen current position")
-	store.position_current[store.resolve(prey)] = Vector2(150, 100)
+	_check(memory_intent != null and memory_intent.destination.distance_to(prey_position) <= ai.settings.max_prediction_distance, "Search uses the last sighting instead of the target's unseen current position")
+	store.position_current[store.resolve(prey)] = prey_position
 	for tick: int in range(8, 14):
 		ai.begin_frame()
 		ai.begin_step(tick)

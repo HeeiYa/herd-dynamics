@@ -41,6 +41,7 @@ enum MotionBackend { CPU, GPU }
 @export var ai_budget_usec: int = 2000
 @export var perception_jobs: int = 512
 @export var decision_jobs: int = 256
+## Additional melee reach beyond the combined body radii, not center distance.
 @export var attack_range: float = 16.0
 @export var attack_windup_ticks: int = 12
 @export var attack_window_ticks: int = 10

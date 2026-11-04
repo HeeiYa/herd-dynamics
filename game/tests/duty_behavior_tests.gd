@@ -185,8 +185,11 @@ func _test_full_hunt_fallback() -> void:
 	var world: SimulationWorld = _world()
 	var sheep: AgentHandle = world.store.create_agent(SimTypes.Species.SHEEP, Vector2(900, 500), world.config.agent_radius)
 	var wolves: Array[AgentHandle] = []
+	# Keep this lease-capacity fixture outside the higher-priority melee branch.
+	var approach_distance: float = world.config.agent_radius * 2.0 + world.config.attack_range + world.ai.settings.attack_approach_margin
+	var hunter_x: float = 900.0 - approach_distance - 20.0
 	for index: int in range(4):
-		wolves.append(world.create_at(SimTypes.Species.WOLF, Vector2(848, 480 + index * 13)))
+		wolves.append(world.create_at(SimTypes.Species.WOLF, Vector2(hunter_x, 480 + index * 13)))
 	await process_frame
 	_decide(world, wolves, 0)
 	world.ai.coordination.begin_step(1)

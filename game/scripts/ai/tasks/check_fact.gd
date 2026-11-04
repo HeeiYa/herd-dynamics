@@ -52,7 +52,7 @@ func _holds() -> bool:
 		Fact.ATTACK_RANGE:
 			if context.prey == null or context.observation_for(context.prey.handle) == null:
 				return false
-			return _directly_visible(context.prey) and context.position().distance_to(context.prey.position) <= ai.config.attack_range + ai.settings.attack_approach_margin
+			return _directly_visible(context.prey) and _within_attack_approach(context.prey)
 		Fact.NEEDS_REGROUP:
 			if context.flock_count <= 1:
 				context.regrouping = false
@@ -95,3 +95,13 @@ func _hunger() -> float:
 
 func _directly_visible(sighting: LocalObservation) -> bool:
 	return sighting.was_visible_at_scan(context.last_perception_tick, context.current_tick, context.coordinator.config.memory_ticks) and context.observation_for(sighting.handle) != null
+
+func _within_attack_approach(sighting: LocalObservation) -> bool:
+	var ai: AICoordinator = context.coordinator
+	# Interaction's reach is measured outside both body surfaces. Every species
+	# currently spawns with the same immutable config.agent_radius. If bodies
+	# become heterogeneous, observe their radius in LocalObservation; never look
+	# up an unseen target's live Store row to recover its geometry or position.
+	var contact_reach: float = ai.config.agent_radius * 2.0 + ai.config.attack_range
+	var approach_distance: float = contact_reach + ai.settings.attack_approach_margin
+	return context.position().distance_to(sighting.position) <= approach_distance

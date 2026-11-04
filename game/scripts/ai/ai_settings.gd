@@ -58,4 +58,5 @@ extends Resource
 @export var wander_ticks: int = 150
 @export var threat_memory_fraction: float = 0.75
 @export var max_share_recipients: int = 4
+## Extra approach distance outside physical contact reach; never a hit radius.
 @export var attack_approach_margin: float = 16.0
