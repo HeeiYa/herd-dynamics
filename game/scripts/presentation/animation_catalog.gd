@@ -27,6 +27,7 @@ class Clip extends RefCounted:
 	var loop: bool = false
 	var random_phase: bool = false
 	var pivot: Vector2 = Vector2.ZERO
+	var uniform_frame_size: bool = true
 
 	func frame_at(elapsed_ms: float) -> Rect2:
 		var local_ms: float = maxf(elapsed_ms, 0.0)
@@ -64,6 +65,8 @@ func load_assets() -> void:
 		for rectangle: Array in raw["rectangles"]:
 			clip.rectangles.append(Rect2(float(rectangle[0]), float(rectangle[1]), float(rectangle[2]), float(rectangle[3])))
 		assert(clip.rectangles.size() == clip.cumulative_ms.size())
+		for rectangle: Rect2 in clip.rectangles:
+			clip.uniform_frame_size = clip.uniform_frame_size and rectangle.size == clip.rectangles[0].size
 		clips.append(clip)
 	assert(clips.size() == ACTION_NAMES.size() * DIRECTIONS.size())
 

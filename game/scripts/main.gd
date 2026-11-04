@@ -37,7 +37,10 @@ func _initialize() -> void:
 		scenario = get_meta("initial_scenario") as ScenarioConfig
 	if has_meta("initial_config"):
 		simulation_config = get_meta("initial_config") as SimulationConfig
+	simulation_config.gpu_presentation = true
 	for argument: String in OS.get_cmdline_user_args():
+		if argument == "--presentation=cpu":
+			simulation_config.gpu_presentation = false
 		if argument == "--spatial=dense":
 			simulation_config.spatial_backend = SimulationConfig.SpatialBackend.DENSE
 		elif argument == "--spatial=sparse":

@@ -147,6 +147,7 @@ func _run() -> void:
 		"initial": [scenario.sheep_count, scenario.wolf_count, scenario.dog_count],
 		"start_counts": Array(start_counts), "final_counts": Array(_access.counts()), "captures": _access.capture_count,
 		"motion_backend": _access.motion_backend_status, "gpu_bulk": config.gpu_bulk_upload,
+		"presentation_backend": "gpu_instances" if config.gpu_presentation else "cpu_canvas",
 		"ai_budget_usec": config.worker_ai_budget_usec if worker else config.ai_budget_usec,
 		"ai_budget_clock": "fixed step" if worker else "render frame",
 		"warmup_seconds": float(_options.get("warmup-seconds", "10")), "wall_seconds": elapsed_seconds,

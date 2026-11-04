@@ -36,6 +36,8 @@ class DrawEntry extends RefCounted:
 	var is_capture: bool = false
 	var visible_frame: int = -1
 	var listed: bool = false
+	var clip_index: int = 0
+	var local_animation_ms: float = 0.0
 
 class AnimationState extends RefCounted:
 	var handle: AgentHandle
@@ -90,6 +92,7 @@ var _observed_tick: int = -1
 var _seed: int = 42
 var _presentation_frame: int = 0
 var _incremental_sort_active: bool = false
+var _instance_animator: InstanceAnimator
 
 func _init(instrumentation: Probes = null) -> void:
 	probes = instrumentation if instrumentation != null else Probes.new()
@@ -106,6 +109,9 @@ func setup(store: AgentStore, intents: IntentBuffer, resources: ResourceGrid, co
 	_ground.configure(_resources, _config.world_size)
 	add_child(_ground)
 	_create_shadows()
+	if _config.gpu_presentation:
+		_instance_animator = InstanceAnimator.new()
+		_instance_animator.setup(self, _catalog)
 	_selection = SelectionOverlay.new()
 	_selection.z_index = -1
 	add_child(_selection)
@@ -283,9 +289,20 @@ func present(tick: int, alpha: float, direct: bool = false) -> void:
 	_finish_draw_list()
 	sort_usec = Time.get_ticks_usec() - sort_start
 	var shadows_start: int = Time.get_ticks_usec() if probes.enabled else 0
-	_update_shadows()
+	if _config.gpu_presentation:
+		if _instance_animator == null:
+			_instance_animator = InstanceAnimator.new()
+			_instance_animator.setup(self, _catalog)
+		_instance_animator.set_enabled(true)
+		_shadows.hide()
+		_instance_animator.submit(_draw_list, body_scale, _config.world_size)
+	else:
+		if _instance_animator != null:
+			_instance_animator.set_enabled(false)
+		_shadows.show()
+		_update_shadows()
 	if probes.enabled:
-		probes.record(Probes.Tag.SHADOWS, Time.get_ticks_usec() - shadows_start)
+		probes.record(Probes.Tag.BODY_SUBMIT if _config.gpu_presentation else Probes.Tag.SHADOWS, Time.get_ticks_usec() - shadows_start)
 	_update_selection(interpolation, direct)
 	queue_redraw()
 	render_build_usec = Time.get_ticks_usec() - started_usec
@@ -296,7 +313,17 @@ func present(tick: int, alpha: float, direct: bool = false) -> void:
 func _prepare_drawing(entry: DrawEntry, foot: Vector2, action: int, direction: int, elapsed_ms: float) -> void:
 	var clip: AnimationCatalog.Clip = _catalog.get_clip(action, direction)
 	entry.foot = foot
-	entry.region = clip.frame_at(elapsed_ms)
+	# Durations are integer milliseconds. Reduce in CPU double precision before
+	# transport: integer local time is exact in float32 even after long sessions.
+	if _config.gpu_presentation:
+		entry.clip_index = action * AnimationCatalog.DIRECTIONS.size() + direction
+		var local_ms: float = maxf(elapsed_ms, 0.0)
+		local_ms = fmod(local_ms, clip.duration_ms) if clip.loop else minf(local_ms, clip.duration_ms - 1)
+		entry.local_animation_ms = floorf(local_ms)
+	if _config.gpu_presentation and clip.uniform_frame_size and not entry.is_capture:
+		entry.region = clip.rectangles[0] # Bounds only; shader chooses atlas position.
+	else:
+		entry.region = clip.frame_at(elapsed_ms)
 	entry.area = Rect2(foot - clip.pivot * body_scale, entry.region.size * body_scale)
 
 func _reset_draw_list() -> void:
@@ -391,7 +418,7 @@ func _update_selection(alpha: float, direct: bool) -> void:
 	_selection.queue_redraw()
 
 func _draw() -> void:
-	if _catalog.texture == null:
+	if _catalog.texture == null or _config.gpu_presentation:
 		return
 	var started_usec: int = Time.get_ticks_usec() if probes.enabled else 0
 	# One texture/material and one globally sorted body submission stream.
