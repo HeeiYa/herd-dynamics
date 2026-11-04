@@ -31,6 +31,9 @@ var moving_count: int = 0
 var displacement_sum: float = 0.0
 var steps: int = 0
 var pack_usec: int = 0
+# Both bulk counters are subsets of pack_usec, never additive to it.
+var bulk_rows_usec: int = 0
+var bulk_columns_usec: int = 0
 var upload_usec: int = 0
 var submit_wait_usec: int = 0
 var readback_usec: int = 0
@@ -58,6 +61,7 @@ var _parameters := PackedFloat32Array()
 var _intent_records := PackedVector4Array()
 var _phase_flags := PackedVector4Array()
 var _identity_directions := PackedVector2Array()
+var _cached_store: AgentStore
 var _cached_life_revision: int = -1
 var _cached_epoch: int = -1
 
@@ -223,6 +227,7 @@ func run(store: AgentStore, intents: IntentBuffer, field: CrowdMotionField, conf
 ## synchronous snapshots, not aliases or a second authoritative world state.
 func _pack_bulk(store: AgentStore, intents: IntentBuffer, field: CrowdMotionField, config: SimulationConfig, tick: int) -> PackedByteArray:
 	_refresh_identity_directions(store)
+	var rows_started: int = Time.get_ticks_usec()
 	_intent_records.resize(store.capacity)
 	_phase_flags.resize(store.capacity)
 	field_agent_count = 0
@@ -243,6 +248,8 @@ func _pack_bulk(store: AgentStore, intents: IntentBuffer, field: CrowdMotionFiel
 			_intent_records[dense] = Vector4(intent.destination.x, intent.destination.y, intent.speed, intent.mode)
 		var retreat: bool = intent != null and intent.behavior == SimTypes.Behavior.RETREAT
 		_phase_flags[dense] = Vector4(life_state, float(use_field), float(retreat), 0.0)
+	bulk_rows_usec += Time.get_ticks_usec() - rows_started
+	var columns_started: int = Time.get_ticks_usec()
 	# Word offsets (C = store.capacity) match gpu_motion_pack.glsl/pack_actor:
 	# position 0C, velocity 2C, facing 4C, radius 6C, species 7C, slot 8C,
 	# next 9C, identity direction 10C, intent 12C, phase flags 16C.
@@ -257,16 +264,18 @@ func _pack_bulk(store: AgentStore, intents: IntentBuffer, field: CrowdMotionFiel
 	bytes.append_array(_intent_records.to_byte_array())
 	bytes.append_array(_phase_flags.to_byte_array())
 	assert(bytes.size() == store.capacity * ACTOR_FLOATS * BYTES_PER_FLOAT)
+	bulk_columns_usec += Time.get_ticks_usec() - columns_started
 	return bytes
 
 func _refresh_identity_directions(store: AgentStore) -> void:
 	# Dense projection is valid only for this store's complete lifecycle revision.
 	# Swap deletion, slot reuse, reset and held changes all invalidate it.
-	if _cached_life_revision == store.life_revision and _cached_epoch == store.epoch:
+	if _cached_store == store and _cached_life_revision == store.life_revision and _cached_epoch == store.epoch:
 		return
 	_identity_directions.resize(store.capacity)
 	for dense: int in store.count:
 		_identity_directions[dense] = CrowdMotionField.identity_direction(store.handle_at(dense))
+	_cached_store = store
 	_cached_life_revision = store.life_revision
 	_cached_epoch = store.epoch
 	identity_cache_rebuilds += 1
@@ -330,6 +339,8 @@ func _commit(store: AgentStore, result: PackedFloat32Array) -> void:
 func reset_metrics() -> void:
 	steps = 0
 	pack_usec = 0
+	bulk_rows_usec = 0
+	bulk_columns_usec = 0
 	upload_usec = 0
 	submit_wait_usec = 0
 	readback_usec = 0
@@ -341,6 +352,7 @@ func reset_metrics() -> void:
 
 func metrics() -> Dictionary:
 	return {"steps": steps, "pack_us": pack_usec, "upload_us": upload_usec,
+		"bulk_rows_us": bulk_rows_usec, "bulk_columns_us": bulk_columns_usec,
 		"submit_wait_us": submit_wait_usec, "readback_us": readback_usec, "commit_us": commit_usec,
 		"gpu_timestamp_us": gpu_elapsed_usec if gpu_timestamp_samples > 0 else null, "gpu_timestamp_samples": gpu_timestamp_samples,
 		"timestamp_count_last": timestamp_count_last,
@@ -360,6 +372,9 @@ func _release_buffers() -> void:
 	_buffers.clear()
 
 func close() -> void:
+	_cached_store = null
+	_cached_life_revision = -1
+	_cached_epoch = -1
 	if _device == null:
 		return
 	_release_buffers()
@@ -380,5 +395,3 @@ func close() -> void:
 	_capacity = 0
 	_cell_capacity_bytes = 0
 	_lookup_capacity_bytes = 0
-	_cached_life_revision = -1
-	_cached_epoch = -1
