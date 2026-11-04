@@ -15,6 +15,10 @@ var _session_log: ObserverSessionLog
 func _ready() -> void:
 	if not has_meta("benchmark_view"):
 		for argument: String in OS.get_cmdline_user_args():
+			if argument == "--benchmark=production-behavior":
+				get_tree().root.add_child.call_deferred(ProductionBehaviorBenchmark.new())
+				queue_free()
+				return
 			if argument == "--benchmark=execution":
 				get_tree().root.add_child.call_deferred(ExecutionBenchmark.new())
 				queue_free()

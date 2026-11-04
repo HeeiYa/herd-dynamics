@@ -28,6 +28,9 @@ var motion: MotionSystem
 var interaction: InteractionSystem
 var tick: int = 0
 var capture_count: int = 0
+## Optional owner-thread diagnostic hook after stage 0, before any AI work.
+## Ordinary play leaves it empty; observers must not alter strategies or state.
+var diagnostic_step_started: Callable
 var phase_usec: PackedInt64Array = PackedInt64Array([0, 0, 0, 0, 0, 0, 0])
 var pending_spawns: PackedInt32Array = PackedInt32Array([0, 0, 0])
 var _pending_removals: Array[AgentHandle] = []
@@ -295,6 +298,8 @@ func step() -> void:
 	var started: int = Time.get_ticks_usec()
 	_apply_commands()
 	phase_usec[0] = Time.get_ticks_usec() - started
+	if diagnostic_step_started.is_valid():
+		diagnostic_step_started.call(self)
 	started = Time.get_ticks_usec()
 	ai.begin_step(tick)
 	phase_usec[1] = Time.get_ticks_usec() - started

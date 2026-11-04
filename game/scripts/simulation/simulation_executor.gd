@@ -31,6 +31,9 @@ var _pose_epoch: int = -1
 var _motion_completed_usec: int = 0
 var _previous_motion_completed_usec: int = 0
 var _pose_sample_count: int = 0
+var _behavior_probe: ProductionBehaviorProbe
+# Only a completed, primitive report crosses the mutex; the UI never sees probe/World.
+var _behavior_report: Dictionary = {}
 
 # Diagnostic accumulators are updated/read under the mailbox mutex. Sampling
 # never borrows the live World. Totals span resets; epoch/tick label the latest
@@ -129,6 +132,14 @@ func poll_state(delivered_sequence: int) -> SimulationPublication:
 	_mutex.unlock()
 	return result
 
+## Ownership transfer once, after the diagnostic protocol has completed.
+func take_behavior_report() -> Dictionary:
+	_mutex.lock()
+	var result: Dictionary = _behavior_report
+	_behavior_report = {}
+	_mutex.unlock()
+	return result
+
 func close() -> void:
 	if not _thread.is_started():
 		return
@@ -143,6 +154,7 @@ func _run() -> void:
 	world.captured.connect(_capture_notice)
 	world.observer_event.connect(_observer_notice)
 	world.setup(_config, _initial)
+	_setup_behavior_probe(world)
 	_publish(world, 0)
 	var last_usec: int = Time.get_ticks_usec()
 	var consecutive_steps: int = 0
@@ -170,10 +182,14 @@ func _run() -> void:
 			_wait_one_millisecond(WaitReason.BACKPRESSURE)
 			continue
 		if _single_steps > 0 or (not _paused and _accumulator_seconds >= _config.fixed_dt):
+			if _behavior_probe != null:
+				_behavior_probe.before_step(world)
 			var started: int = Time.get_ticks_usec()
 			world.ai.begin_frame()
 			world.step()
 			var step_usec: int = Time.get_ticks_usec() - started
+			if _behavior_probe != null:
+				_behavior_probe.after_step(world)
 			if _single_steps > 0:
 				_single_steps -= 1
 				_receipt(_step_requests.pop_front(), world, true, "completed_single_step")
@@ -183,6 +199,7 @@ func _run() -> void:
 				_receipt(command, world, true, "processed_at_stage_zero")
 			_awaiting_step.clear()
 			_publish(world, step_usec)
+			_finish_behavior_probe()
 			consecutive_steps += 1
 			if consecutive_steps >= _config.max_catchup_steps:
 				consecutive_steps = 0
@@ -195,6 +212,28 @@ func _run() -> void:
 	world.motion.close()
 	world.ai.reset()
 	world.free()
+
+func _setup_behavior_probe(world: SimulationWorld) -> void:
+	var arguments: PackedStringArray = OS.get_cmdline_user_args()
+	if not arguments.has("--benchmark=production-behavior"):
+		return
+	var sheep_count: int = 80
+	for argument: String in arguments:
+		if argument.begins_with("--sheep="):
+			sheep_count = int(argument.trim_prefix("--sheep="))
+	_behavior_probe = ProductionBehaviorProbe.new()
+	_behavior_probe.setup(world, sheep_count, _initial.random_seed)
+
+func _finish_behavior_probe() -> void:
+	if _behavior_probe == null or not _behavior_probe.finished:
+		return
+	var completed_report: Dictionary = _behavior_probe.finish_report()
+	_mutex.lock()
+	_behavior_report = completed_report
+	_mutex.unlock()
+	# This only ends an explicitly invoked diagnostic. Ordinary play has no probe.
+	_paused = true
+	_behavior_probe = null
 
 func _apply_commands(world: SimulationWorld, commands: Array[SimulationCommand]) -> bool:
 	var changed: bool = false
