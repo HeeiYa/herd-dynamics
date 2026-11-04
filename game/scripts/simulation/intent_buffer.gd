@@ -49,7 +49,9 @@ func _record_for(handle: AgentHandle) -> MotionIntent:
 	if slot < 0 or slot >= _intents.size():
 		return null
 	var intent: MotionIntent = _intents[slot]
-	if intent == null or not intent.actor.same_life(handle):
+	if intent == null:
+		return null
+	if intent.actor != handle and not intent.actor.same_life(handle):
 		return null
 	return intent
 
@@ -61,7 +63,14 @@ func get_intent(handle: AgentHandle, tick: int) -> MotionIntent:
 	if slot < 0 or slot >= _intents.size():
 		return null
 	var intent: MotionIntent = _intents[slot]
-	if intent == null or not intent.actor.same_life(handle) or tick >= intent.expires_tick:
+	if intent == null:
+		return null
+	# Store handles are immutable and canonical for the entire life. The same
+	# object already carries the same slot/generation/epoch; reconstructed
+	# external handles still take the complete identity comparison.
+	if intent.actor != handle and not intent.actor.same_life(handle):
+		return null
+	if tick >= intent.expires_tick:
 		return null
 	return intent
 
