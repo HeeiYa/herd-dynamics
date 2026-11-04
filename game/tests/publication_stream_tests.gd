@@ -45,7 +45,7 @@ func _run() -> void:
 		executor._publish(world, 1)
 		if sequence == 0:
 			pinned = executor._latest
-			first_pose = pinned.poses[0]
+			first_pose = pinned.pose_at(0)
 	_check(executor._deliveries.size() == 8, "Eight reliable batches are retained at the capacity boundary")
 	_check(executor.poll_state(-1) == null, "State cannot overtake undelivered reliable facts")
 	var behavior_count: int = 0
@@ -65,7 +65,7 @@ func _run() -> void:
 	var newest: SimulationPublication = executor.poll_state(7)
 	_check(newest.sequence == 7 and executor.poll_state(7) == null, "Display mailbox yields only the newest unread state")
 	_check(pinned.store.position_current[0] == Vector2(0, 100) and first_pose.behavior == SimTypes.Behavior.FLEE, "Delivered snapshots and poses remain immutable after later publications")
-	_check(newest.poses[0].behavior == SimTypes.Behavior.IDLE, "Latest state is self-contained after seven skipped versions")
+	_check(newest.pose_at(0).behavior == SimTypes.Behavior.IDLE, "Latest state is self-contained after seven skipped versions")
 	var motion_clock: int = newest.completed_usec
 	_check(newest.previous_completed_usec <= motion_clock, "Display age retains the actual two wall-clock endpoints")
 	executor._publish(world, 0)

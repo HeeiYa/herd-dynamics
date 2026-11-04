@@ -76,11 +76,12 @@ func get_clip(action: int, direction: int) -> Clip:
 static func direction_for(facing: Vector2, previous: int) -> int:
 	if facing.length_squared() < 0.01:
 		return previous
-	# A small angular dead band prevents flicker at the eight direction boundaries.
-	var previous_angle: float = previous * PI / 4.0
-	if absf(wrapf(facing.angle() - previous_angle, -PI, PI)) < PI / 8.0 + 0.06:
+	# Reuse the angle for hysteresis and quantization. A scalar cone-table
+	# prototype was slower in GDScript; unchanged worker facings skip this call.
+	var angle: float = facing.angle()
+	if absf(wrapf(angle - previous * PI / 4.0, -PI, PI)) < PI / 8.0 + 0.06:
 		return previous
-	return posmod(roundi(facing.angle() / (PI / 4.0)), 8)
+	return posmod(roundi(angle / (PI / 4.0)), 8)
 
 static func action_for(species: int, behavior: int, moving: bool, pressure: bool) -> int:
 	match species:

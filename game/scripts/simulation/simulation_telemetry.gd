@@ -23,3 +23,12 @@ var step_usec: int = 0
 var snapshot_usec: int = 0
 var pose_usec: int = 0
 var ai_used_usec: int = 0
+
+var store_copy_usec: int = 0
+var intent_copy_usec: int = 0
+var resource_copy_usec: int = 0
+var metadata_copy_usec: int = 0
+var quality_usec: int = 0
+var pose_changed: int = 0
+var pose_allocations: int = 0
+var pose_buffer_allocations: int = 0

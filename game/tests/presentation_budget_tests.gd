@@ -86,9 +86,9 @@ func _run() -> void:
 	for index: int in range(1, job.drawings.size()):
 		_check(not WorldPresentation._draw_before(job.drawings[index], job.drawings[index - 1]), "Incremental repair retains the complete draw order")
 	var future := CaptureEvent.new()
-	future.target = snapshot.poses[0].handle
+	future.target = snapshot.pose_at(0).handle
 	future.tick = second.source.tick + 20
-	view.queue_reliable_capture(future, snapshot.poses[0])
+	view.queue_reliable_capture(future, snapshot.pose_at(0))
 	_check(view.reliable_captures(second.source, second.display_tick).is_empty(), "Future capture facts do not duplicate a still-live body in an older frame")
 	_check(view._reliable_captures.size() == 1, "Future capture waits for a compatible display state")
 	var expired := SimulationPublication.new()

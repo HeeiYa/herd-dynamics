@@ -24,6 +24,8 @@ var _sequence: int = 0
 var _awaiting_step: Array[SimulationCommand] = []
 var _notices: Array[SimulationNotice] = []
 var _poses: Array[PublishedPose] = []
+var _pose_histories: Array[PublishedPose.History] = []
+var _pose_buffers: Array[PoseBuffer] = []
 var _pose_epoch: int = -1
 var _motion_completed_usec: int = 0
 var _previous_motion_completed_usec: int = 0
@@ -238,27 +240,65 @@ func _observer_notice(event: Dictionary) -> void:
 	notice.observer = event.duplicate(true)
 	_notices.append(notice)
 
+func _acquire_pose_buffer(count: int, publication: SimulationPublication) -> PoseBuffer:
+	for index: int in _pose_buffers.size():
+		var available: PoseBuffer = _pose_buffers[index]
+		# Only the pool and this local may own a reusable buffer lease.
+		if available.get_reference_count() == 2:
+			available.prepare(count)
+			return available
+	var created := PoseBuffer.new()
+	created.prepare(count)
+	publication.pose_buffer_allocations += 1
+	# External readers can pin arbitrarily old frames. Bounded retention with
+	# unpooled fallback preserves correctness instead of stealing a reader's data.
+	if _pose_buffers.size() < 8:
+		_pose_buffers.append(created)
+	return created
+
 func _sample_poses(world: SimulationWorld, publication: SimulationPublication) -> void:
-	if _pose_epoch != world.store.epoch:
+	var store: AgentStore = world.store
+	if _pose_epoch != store.epoch:
 		_poses.clear()
-		_pose_epoch = world.store.epoch
-	_poses.resize(world.store.capacity)
-	for dense: int in world.store.count:
-		var handle: AgentHandle = world.store.handle_at(dense)
-		var previous: PublishedPose = _poses[handle.slot]
-		var pose: PublishedPose = PublishedPose.sample(world, dense, previous)
-		var old_behavior: int = previous.behavior if previous != null and previous.handle.same_life(handle) else SimTypes.Behavior.IDLE
-		if pose.behavior != old_behavior:
-			var notice := SimulationNotice.new()
-			notice.kind = SimulationNotice.Kind.BEHAVIOR
-			notice.pose = pose
-			notice.position = world.store.position_current[dense]
-			notice.previous_behavior = old_behavior
-			notice.tick = maxi(0, world.tick - 1)
-			notice.held = world.store.held[dense] != 0
-			_notices.append(notice)
-		_poses[handle.slot] = pose
-		publication.poses.append(pose)
+		_pose_histories.clear()
+		_pose_epoch = store.epoch
+	_poses.resize(store.capacity)
+	_pose_histories.resize(store.capacity)
+	var buffer: PoseBuffer = _acquire_pose_buffer(store.count, publication)
+	publication.pose_buffer = buffer
+	var observed_tick: int = maxi(0, world.tick - 1)
+	for dense: int in store.count:
+		var handle: AgentHandle = store.handle_at(dense)
+		var slot: int = handle.slot
+		var previous: PublishedPose = _poses[slot]
+		var history: PublishedPose.History = _pose_histories[slot]
+		if history == null:
+			history = PublishedPose.History.new()
+			_pose_histories[slot] = history
+		var intent: MotionIntent = world.intents.get_intent(handle, observed_tick)
+		# One validated lookup serves both clocks: animation uses n-1; service
+		# quality counts expiration at n. Dense columns are valid in this phase.
+		if store.alive[dense] != 0 and store.held[dense] == 0:
+			publication.active_agents += 1
+			if intent == null or world.tick >= intent.expires_tick:
+				publication.missing_intents += 1
+		var moving: bool = store.velocity_current[dense].length_squared() > 9.0
+		var pose: PublishedPose = PublishedPose.sample(handle, store.species[dense], intent, moving, store.facing[dense], world.tick, previous, history)
+		if pose != previous:
+			publication.pose_changed += 1
+			publication.pose_allocations += int(history.allocated_on_acquire)
+			var old_behavior: int = previous.behavior if previous != null and previous.handle.same_life(handle) else SimTypes.Behavior.IDLE
+			if pose.behavior != old_behavior:
+				var notice := SimulationNotice.new()
+				notice.kind = SimulationNotice.Kind.BEHAVIOR
+				notice.pose = pose
+				notice.position = store.position_current[dense]
+				notice.previous_behavior = old_behavior
+				notice.tick = observed_tick
+				notice.held = store.held[dense] != 0
+				_notices.append(notice)
+		_poses[slot] = pose
+		buffer.write(dense, pose)
 
 func _publish(world: SimulationWorld, step_usec: int, closing: bool = false) -> void:
 	var completed_usec: int = Time.get_ticks_usec()

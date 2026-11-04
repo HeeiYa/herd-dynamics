@@ -85,7 +85,7 @@ func _body() -> void:
 		return
 	var dense: int = _index
 	_index += 1
-	var pose: PublishedPose = source.poses[dense]
+	var pose: PublishedPose = source.pose_at(dense)
 	var state: WorldPresentation.AnimationState = states[pose.handle.slot]
 	if state == null:
 		state = WorldPresentation.AnimationState.new()
