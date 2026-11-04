@@ -46,6 +46,15 @@ var returning_to_flock: bool = false
 var retreating: bool = false
 var last_flock_seen_tick: int = -1
 var last_flock_searched_tick: int = -1
+# A search episode is tied to one historical, nonempty flock observation.
+# It never refreshes perception knowledge or follows unseen live sheep.
+enum FlockSearchPhase { TO_ANCHOR, LOCAL_SWEEP, FINISHED }
+var flock_search_observed_tick: int = -1
+var flock_search_phase: FlockSearchPhase = FlockSearchPhase.FINISHED
+var flock_search_anchor: Vector2 = Vector2.ZERO
+var flock_search_direction: Vector2 = Vector2.RIGHT
+var flock_search_waypoint: int = 0
+var flock_search_deadline_tick: int = 0
 var grazing_committed: bool = false
 var regrouping: bool = false
 var grazing_retry_after_tick: int = 0
@@ -158,6 +167,12 @@ func clear_runtime() -> void:
 	retreating = false
 	last_flock_seen_tick = -1
 	last_flock_searched_tick = -1
+	flock_search_observed_tick = -1
+	flock_search_phase = FlockSearchPhase.FINISHED
+	flock_search_anchor = Vector2.ZERO
+	flock_search_direction = Vector2.RIGHT
+	flock_search_waypoint = 0
+	flock_search_deadline_tick = 0
 	grazing_committed = false
 	regrouping = false
 	grazing_retry_after_tick = 0

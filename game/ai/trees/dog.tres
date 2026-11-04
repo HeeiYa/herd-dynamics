@@ -49,7 +49,7 @@ custom_name = "Guard an observed local flock"
 children = [SubResource("condition_flock"), SubResource("guard")]
 
 [sub_resource type="BTCondition" id="condition_memory"]
-custom_name = "Unvisited last flock location"
+custom_name = "Unsearched historical protection flock"
 script = ExtResource("check_fact")
 fact = 11
 
@@ -58,7 +58,7 @@ custom_name = "search_last_flock"
 script = ExtResource("search_last_flock")
 
 [sub_resource type="BTDynamicSequence" id="branch_memory"]
-custom_name = "Look for the lost protection flock"
+custom_name = "Return to historical flock anchor, then search its neighborhood within limits"
 children = [SubResource("condition_memory"), SubResource("search_memory")]
 
 [sub_resource type="BTAction" id="fallback"]
