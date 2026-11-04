@@ -66,10 +66,17 @@ func apply_scenario(scenario: ScenarioConfig) -> void:
 	if scenario.pasture != null:
 		hud.tuning.apply_generation_draft(scenario.pasture)
 	hud.layout.select(hud.layout.get_item_index(scenario.layout))
-	hud.seed.value = scenario.random_seed
-	hud.sheep.value = scenario.sheep_count
-	hud.wolves.value = scenario.wolf_count
-	hud.dogs.value = scenario.dog_count
+	_set_scenario_integer(hud.seed, scenario.random_seed)
+	_set_scenario_integer(hud.sheep, scenario.sheep_count)
+	_set_scenario_integer(hud.wolves, scenario.wolf_count)
+	_set_scenario_integer(hud.dogs, scenario.dog_count)
+
+func _set_scenario_integer(input: SpinBox, requested_value: int) -> void:
+	# Hidden SpinBoxes can retain scene-default text after value changes. Let
+	# Range clamp first, then align this explicit programmatic draft immediately.
+	# Do not do this in refresh/reset: that would overwrite uncommitted user text.
+	input.value = requested_value
+	input.get_line_edit().text = str(int(input.value))
 
 func _on_action(action: ObserverHud.Action) -> void:
 	match action:
