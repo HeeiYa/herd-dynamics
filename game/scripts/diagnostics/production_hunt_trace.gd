@@ -3,6 +3,9 @@ extends RefCounted
 ## Three role metrics belong to one declared target life, never mixed targets.
 var handle: AgentHandle
 var previous_position: Vector2
+var previous_velocity: Vector2
+var previous_task: StringName
+var previous_token: int
 var previous_hunger: float
 var eligible_tick: int = -1
 var eligible_usec: int = -1

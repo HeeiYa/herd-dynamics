@@ -88,6 +88,7 @@ func _run() -> void:
 		if behavior_case == "hunt-cooperation":
 			saved = _write_records(output.path_join("roles.csv"), report["roles"]) and saved
 			saved = _write_records(output.path_join("hunt-contexts.csv"), report["samples"]) and saved
+			saved = _write_records(output.path_join("attack-steps.csv"), report["attack_steps"]) and saved
 			saved = _write_records(output.path_join("captures.csv"), report["captures"]) and saved
 		else:
 			saved = _write_records(output.path_join("first-intake.csv"), report["first_intake"]) and saved

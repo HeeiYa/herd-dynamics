@@ -15,6 +15,7 @@ func _check(condition: bool, label: String) -> void:
 func _run() -> void:
 	_check_migration_chain()
 	_check_hunt_protocol()
+	_check_attack_trace_lifecycle()
 	_check_forage_protocol(false)
 	_check_forage_protocol(true)
 	print("PRODUCTION_SCENARIO_TESTS checks=%d failures=%d" % [_checks, _failures])
@@ -80,6 +81,10 @@ func _check_hunt_protocol() -> void:
 	_check(outcome["hunt_decision"] + outcome["eligible_without_hunt"] == outcome["eligible"], "Hunt nonresponses remain explicit")
 	_check(report["roles"].size() == 9 and report["terminal"].size() == 3, "Role evidence retains every hunter and all three roles, including unused roles")
 	_check(report["samples"].size() == 963, "Three hunters have bounded periodic context samples and final endpoints")
+	_check(report["attack_steps"].size() == 2880, "Per-step attack evidence remains bounded to three hunters and 960 steps")
+	var first_attack_step: Dictionary = report["attack_steps"][0]
+	_check(first_attack_step["step_start_tick"] == 240 and first_attack_step["step_end_tick"] == 241, "Attack geometry labels both same-phase endpoints")
+	_check(first_attack_step["geometry_target"] == report["declared_target"] and is_equal_approx(first_attack_step["distance_start"], 110.0), "Initial attack distance uses both bodies at stage0, not mixed phases")
 	_check(outcome["duplicate_captures"] == 0, "Each prey life can produce only one actual capture event")
 	for role: Dictionary in report["roles"]:
 		_check(role["target"] == report["declared_target"], "Role metrics never mix different target lives")
@@ -87,6 +92,36 @@ func _check_hunt_protocol() -> void:
 			_check(int(role["first_lease_tick"]) >= ProductionHuntProbe.HUNTER_TICK, "Executed role evidence follows a real lease in the declared opportunity window")
 		if int(role["physical_role_tick"]) >= 0:
 			_check(role["intended_progress_pixels"] >= 1.0 and role["role_direction_progress_pixels"] >= 1.0, "Physical role evidence requires actual progress in both directions")
+	_close(world)
+
+func _check_attack_trace_lifecycle() -> void:
+	var world: SimulationWorld = _new_world()
+	var probe := ProductionHuntProbe.new()
+	probe.setup(world, 8, 42)
+	for step: int in ProductionHuntProbe.HUNTER_TICK + 1:
+		_step(world, probe)
+	probe.observe_step_start(world)
+	var record: ProductionHuntTrace = probe._records[0]
+	var context: AgentContext = world.ai.inspect(record.handle)
+	var intent := MotionIntent.new()
+	intent.mode = SimTypes.IntentMode.ATTACK
+	intent.target = probe._bait
+	intent.owner_token = context.new_token()
+	intent.expires_tick = world.tick + world.config.intent_ticks
+	world.intents.write(record.handle, intent)
+	world.interaction.step(world.tick, world.config.fixed_dt)
+	var sample: Dictionary = probe._sample_attack_step(record, context, intent, world.tick)
+	_check(sample["accepted_tick"] == world.tick and sample["request_status"] == "WINDUP", "Attack trace copies the actual Interaction acceptance and status")
+	_check(sample["active_start_tick"] == world.tick + 12 and sample["active_end_tick"] == world.tick + 22 and sample["cooldown_until_tick"] == world.tick + 60, "Attack trace retains the unchanged authoritative timing window")
+	_check(sample["request_matches_geometry_target"] and sample["request_token"] == intent.owner_token, "Attack facts retain complete actor/target life and token")
+	world.store.mark_dead(probe._bait)
+	var dead: Dictionary = probe._sample_attack_step(record, context, intent, world.tick)
+	_check(not dead["target_end_valid"] and dead["distance_end"] == null and dead["target_end_x"] == null, "Marked-dead prey never resolves to a negative or foreign end-state row")
+	world.store.remove_agent(probe._bait)
+	var replacement: AgentHandle = world.store.create_agent(SimTypes.Species.SHEEP, Vector2(1000, 1000), world.config.agent_radius)
+	_check(replacement.slot == probe._bait.slot and not replacement.same_life(probe._bait), "Attack trace fixture exercises reuse of the same slot")
+	var reused: Dictionary = probe._sample_attack_step(record, context, intent, world.tick)
+	_check(not reused["target_end_valid"] and reused["distance_end"] == null and reused["request_target"] == probe._bait.key(), "Reused slots cannot replace geometry or request identity of the captured life")
 	_close(world)
 
 func _check_forage_protocol(empty_control: bool) -> void:

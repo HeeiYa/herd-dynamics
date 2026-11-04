@@ -13,6 +13,7 @@ var _started_usec: int
 var _bait: AgentHandle
 var _records: Array[ProductionHuntTrace] = []
 var _samples: Array[Dictionary] = []
+var _attack_steps: Array[Dictionary] = []
 var _captures: Array[Dictionary] = []
 var _quality: Array[Dictionary] = []
 var _events: Array[Dictionary] = []
@@ -23,6 +24,7 @@ var _captured_targets: Dictionary[String, bool] = {}
 var _target_active_at_step_start: bool = false
 var _target_position_at_step_start: Vector2
 var _target_velocity_at_step_start: Vector2
+var _target_radius_at_step_start: float
 
 func setup(world: SimulationWorld, sheep_count: int, seed_value: int) -> void:
 	assert(world.store.count == 0 and sheep_count >= 8 and sheep_count <= 1000)
@@ -74,6 +76,10 @@ func observe_step_start(world: SimulationWorld) -> void:
 		var dense: int = world.store.resolve(record.handle)
 		assert(dense >= 0)
 		record.previous_position = world.store.position_current[dense]
+		record.previous_velocity = world.store.velocity_current[dense]
+		var context: AgentContext = world.ai.inspect(record.handle)
+		record.previous_task = context.task_name
+		record.previous_token = context.task_token
 		record.previous_hunger = world.store.hunger[dense]
 	_observe_geometric_opportunity()
 	observer_usec += Time.get_ticks_usec() - started
@@ -86,6 +92,7 @@ func _observe_geometric_opportunity() -> void:
 	var position: Vector2 = _world.store.position_current[target_dense]
 	_target_position_at_step_start = position
 	_target_velocity_at_step_start = _world.store.velocity_current[target_dense]
+	_target_radius_at_step_start = _world.store.radius[target_dense]
 	var exposed: Array[ProductionHuntTrace] = []
 	for record: ProductionHuntTrace in _records:
 		if record.previous_position.distance_to(position) <= _world.config.perception_radius:
@@ -123,6 +130,9 @@ func after_step(world: SimulationWorld) -> void:
 		if role >= 0:
 			roles_present[role] = true
 		_observe_feed(record, context, intent, position, tick)
+		# Exactly three lives over the declared 960-step stimulus window. These
+		# copied facts stay worker-owned until the completed report is transferred.
+		_attack_steps.append(_sample_attack_step(record, context, intent, tick))
 		if tick % SAMPLE_PERIOD == 0 or world.tick == END_TICK:
 			var sample: Dictionary = _sample_context(record, context, intent, lease, position, tick)
 			_samples.append(sample)
@@ -223,6 +233,63 @@ func _sample_context(record: ProductionHuntTrace, context: AgentContext, intent:
 		"perception_tick": context.last_perception_tick, "decision_tick": context.last_decision_tick,
 		"feeding_until": context.feeding_until}
 
+func _sample_attack_step(record: ProductionHuntTrace, context: AgentContext, intent: MotionIntent, tick: int) -> Dictionary:
+	var actor_dense: int = _world.store.resolve(record.handle)
+	assert(actor_dense >= 0)
+	var actor_end: Vector2 = _world.store.position_current[actor_dense]
+	var actor_velocity_end: Vector2 = _world.store.velocity_current[actor_dense]
+	var target_dense: int = _world.store.resolve(_bait)
+	var target_end_valid: bool = target_dense >= 0
+	var row: Dictionary = {"actor": record.handle.key(), "geometry_target": _bait.key(),
+		"step_start_tick": tick, "step_end_tick": tick + 1,
+		"task_before": str(record.previous_task), "token_before": record.previous_token,
+		"task_after": str(context.task_name), "token_after": context.task_token,
+		"decision_tick": context.last_decision_tick, "perception_tick": context.last_perception_tick,
+		"intent_present": intent != null, "intent_owned": intent != null and intent.owner_token == context.task_token,
+		"intent_mode": SimTypes.IntentMode.keys()[intent.mode] if intent != null else "NONE",
+		"intent_token": intent.owner_token if intent != null else -1,
+		"intent_target": intent.target.key() if intent != null and intent.target != null else "",
+		"actor_start_x": record.previous_position.x, "actor_start_y": record.previous_position.y,
+		"actor_start_vx": record.previous_velocity.x, "actor_start_vy": record.previous_velocity.y,
+		"actor_end_x": actor_end.x, "actor_end_y": actor_end.y,
+		"actor_end_vx": actor_velocity_end.x, "actor_end_vy": actor_velocity_end.y,
+		"target_start_valid": _target_active_at_step_start, "target_end_valid": target_end_valid,
+		"target_start_x": null, "target_start_y": null, "target_start_vx": null, "target_start_vy": null,
+		"target_end_x": null, "target_end_y": null, "target_end_vx": null, "target_end_vy": null,
+		"distance_start": null, "distance_end": null, "physical_contact_reach": null}
+	if _target_active_at_step_start:
+		row["target_start_x"] = _target_position_at_step_start.x
+		row["target_start_y"] = _target_position_at_step_start.y
+		row["target_start_vx"] = _target_velocity_at_step_start.x
+		row["target_start_vy"] = _target_velocity_at_step_start.y
+		row["distance_start"] = record.previous_position.distance_to(_target_position_at_step_start)
+		row["physical_contact_reach"] = _world.store.radius[actor_dense] + _target_radius_at_step_start + _world.config.attack_range
+	if target_end_valid:
+		var target_end: Vector2 = _world.store.position_current[target_dense]
+		var target_velocity_end: Vector2 = _world.store.velocity_current[target_dense]
+		row["target_end_x"] = target_end.x
+		row["target_end_y"] = target_end.y
+		row["target_end_vx"] = target_velocity_end.x
+		row["target_end_vy"] = target_velocity_end.y
+		row["distance_end"] = actor_end.distance_to(target_end)
+	row.merge(_sample_attack_request(_world.interaction.get_attack(record.handle)))
+	return row
+
+func _sample_attack_request(request: AttackRequest) -> Dictionary:
+	# Do not retain mutable requests or resolve their target after capture. The
+	# declared target geometry above is usable only when its full life matches.
+	return {"request_present": request != null,
+		"request_actor": request.actor.key() if request != null else "",
+		"request_target": request.target.key() if request != null else "",
+		"request_matches_geometry_target": request != null and request.target.same_life(_bait),
+		"request_token": request.owner_token if request != null else -1,
+		"request_status": AttackRequest.Status.keys()[request.status] if request != null else "NONE",
+		"accepted_tick": request.accepted_tick if request != null else -1,
+		"active_start_tick": request.active_start_tick if request != null else -1,
+		"active_end_tick": request.active_end_tick if request != null else -1,
+		"cooldown_until_tick": request.cooldown_until_tick if request != null else -1,
+		"contact_fraction": request.contact_fraction if request != null else -1.0}
+
 func _sample_quality(tick: int) -> void:
 	var missing: int = 0
 	for dense: int in _world.store.count:
@@ -256,7 +323,9 @@ func finish_report() -> Dictionary:
 		outcome["physically_stopped_feeding"] += int(record.feed_stopped_tick >= 0)
 	var report: Dictionary = report_header(_world, "production-hunt-cooperation-v1", _seed, _sheep_count, _started_usec)
 	report.merge({"case": "hunt_cooperation", "outcomes": [outcome], "records": records, "roles": roles,
-		"terminal": terminal, "samples": _samples.duplicate(true), "quality": _quality.duplicate(true),
+		"terminal": terminal, "samples": _samples.duplicate(true), "attack_steps": _attack_steps.duplicate(true), "quality": _quality.duplicate(true),
+		"attack_trace_version": "same-phase-attack-steps-v1",
+		"attack_trace_semantics": "Three wolves x 960 steps. Start geometry is post-stage0/pre-AI n; end geometry and authoritative AttackRequest are post-interaction/lifecycle n+1. Geometry always names the declared target life, not arbitrary later prey; match request_target before interpreting it. A removed target has null end geometry. Task labels can outlive their cleared intent; intent_present and token are explicit. This observer never drives motion or accepts attacks and its cost is included in observer_usec.",
 		"events": _events.duplicate(true), "captures": _captures.duplicate(true),
 		"declared_target": _bait.key(), "declared_target_alive_at_end": _world.store.is_alive(_bait),
 		"cooperation_opportunity_ticks": _cooperation_opportunity_ticks, "simultaneous_three_owned_role_ticks": _three_roles_ticks,
