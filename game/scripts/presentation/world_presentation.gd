@@ -229,11 +229,14 @@ func _record_changes(state: AnimationState, action: int, facing: Vector2, tick: 
 		state.latest_direction = direction
 
 func _phase_for(handle: AgentHandle, action: int, direction: int) -> float:
+	return phase_for_seed(handle, action, direction, _seed)
+
+func phase_for_seed(handle: AgentHandle, action: int, direction: int, seed_value: int) -> float:
 	var clip: AnimationCatalog.Clip = _catalog.get_clip(action, direction)
 	if not clip.random_phase:
 		return 0.0
 	# Identity and scenario seed derive a visual stream, never the simulation RNG.
-	var stable_hash: int = hash(Vector4i(handle.slot, handle.generation, handle.world_epoch, _seed ^ action))
+	var stable_hash: int = hash(Vector4i(handle.slot, handle.generation, handle.world_epoch, seed_value ^ action))
 	return float(posmod(stable_hash, clip.duration_ms))
 
 func _advance_state(state: AnimationState, display_tick: float) -> void:
@@ -311,16 +314,19 @@ func present(tick: int, alpha: float, direct: bool = false) -> void:
 		probes.record(Probes.Tag.SORT, sort_usec)
 
 func _prepare_drawing(entry: DrawEntry, foot: Vector2, action: int, direction: int, elapsed_ms: float) -> void:
+	prepare_snapshot_drawing(entry, foot, action, direction, elapsed_ms, _config)
+
+func prepare_snapshot_drawing(entry: DrawEntry, foot: Vector2, action: int, direction: int, elapsed_ms: float, config: SimulationConfig) -> void:
 	var clip: AnimationCatalog.Clip = _catalog.get_clip(action, direction)
 	entry.foot = foot
 	# Durations are integer milliseconds. Reduce in CPU double precision before
 	# transport: integer local time is exact in float32 even after long sessions.
-	if _config.gpu_presentation:
+	if config.gpu_presentation:
 		entry.clip_index = action * AnimationCatalog.DIRECTIONS.size() + direction
 		var local_ms: float = maxf(elapsed_ms, 0.0)
 		local_ms = fmod(local_ms, clip.duration_ms) if clip.loop else minf(local_ms, clip.duration_ms - 1)
 		entry.local_animation_ms = floorf(local_ms)
-	if _config.gpu_presentation and clip.uniform_frame_size and not entry.is_capture:
+	if config.gpu_presentation and clip.uniform_frame_size and not entry.is_capture:
 		entry.region = clip.rectangles[0] # Bounds only; shader chooses atlas position.
 	else:
 		entry.region = clip.frame_at(elapsed_ms)
@@ -503,3 +509,82 @@ func bind_world(world: SimulationWorld) -> void:
 	_resources = world.resources
 	_config = world.config
 	_ground.bind_resources(_resources, _config.world_size)
+
+## Reliable capture records are independent of whichever state wins the mailbox.
+var _reliable_captures: Array[SimulationNotice] = []
+
+func queue_reliable_capture(event: CaptureEvent, pose: PublishedPose) -> void:
+	var notice := SimulationNotice.new()
+	notice.capture = event
+	notice.pose = pose
+	_reliable_captures.append(notice)
+
+func reliable_captures(snapshot: SimulationPublication, at_tick: float) -> Array[CaptureVisual]:
+	for index: int in range(_captures.size() - 1, -1, -1):
+		var visual: CaptureVisual = _captures[index]
+		var duration: float = _catalog.get_clip(AnimationCatalog.Action.SHEEP_CAPTURED, visual.direction).duration_ms + 900.0
+		if visual.handle.world_epoch != snapshot.epoch or (at_tick - visual.started_tick) * snapshot.config.fixed_dt * 1000.0 >= duration:
+			_captures.remove_at(index)
+	for index: int in range(_reliable_captures.size() - 1, -1, -1):
+		var notice: SimulationNotice = _reliable_captures[index]
+		var event: CaptureEvent = notice.capture
+		if event.target.world_epoch > snapshot.epoch or (event.target.world_epoch == snapshot.epoch and event.tick > snapshot.tick):
+			continue
+		_reliable_captures.remove_at(index)
+		if event.target.world_epoch != snapshot.epoch:
+			continue
+		var visual := CaptureVisual.new()
+		visual.handle = event.target
+		visual.position = event.position
+		visual.previous_position = event.previous_position
+		visual.direction = AnimationCatalog.direction_for(event.facing, 0)
+		visual.started_tick = event.tick
+		var pose: PublishedPose = notice.pose
+		if pose != null:
+			visual.previous_action = pose.action
+			visual.previous_direction = pose.direction
+			visual.previous_started_tick = pose.started_tick
+			visual.previous_phase_ms = phase_for_seed(pose.handle, pose.action, pose.phase_direction, snapshot.scenario.random_seed)
+		var lifetime_ms: float = _catalog.get_clip(AnimationCatalog.Action.SHEEP_CAPTURED, visual.direction).duration_ms + 900.0
+		if (at_tick - visual.started_tick) * snapshot.config.fixed_dt * 1000.0 < lifetime_ms:
+			_captures.append(visual)
+	return _captures.duplicate()
+
+func instance_animator() -> InstanceAnimator:
+	if _instance_animator == null:
+		_instance_animator = InstanceAnimator.new()
+		_instance_animator.setup(self, _catalog)
+	return _instance_animator
+
+## Only this boundary replaces the front frame. Engine uploads cannot be preempted.
+func commit_job(job: PresentationJob) -> void:
+	var source: SimulationPublication = job.source
+	if _epoch != source.epoch:
+		_epoch = source.epoch
+		selected_handle = null
+		epoch_cleared.emit()
+	_store = source.store
+	_intents = source.intents
+	_resources = source.resources
+	_config = source.config
+	_seed = source.scenario.random_seed
+	_observed_tick = source.tick
+	_states = job.states
+	_draw_list = job.drawings
+	display_tick = job.display_tick
+	display_direct = job.direct
+	visible_count = job.visible_count
+	capture_visible_count = job.capture_count
+	held_hidden_count = job.held_count
+	_ground.commit_image(_resources, _config.world_size, job.image, job.levels)
+	if _config.gpu_presentation:
+		_instance_animator.set_enabled(true)
+		_shadows.hide()
+		_instance_animator.commit(_draw_list.size())
+	else:
+		if _instance_animator != null:
+			_instance_animator.set_enabled(false)
+		_shadows.show()
+		_update_shadows()
+	_update_selection(job.alpha, job.direct)
+	queue_redraw()

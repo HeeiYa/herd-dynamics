@@ -4,5 +4,6 @@ extends RefCounted
 var actor: AgentHandle
 var target: AgentHandle
 var position: Vector2
+var previous_position: Vector2
 var facing: Vector2
 var tick: int

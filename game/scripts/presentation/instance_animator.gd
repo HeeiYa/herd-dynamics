@@ -44,32 +44,45 @@ func set_enabled(enabled: bool) -> void:
 	bodies.visible = enabled
 	shadows.visible = enabled
 
-func submit(entries: Array[WorldPresentation.DrawEntry], scale: float, world_size: Vector2) -> void:
-	if entries.size() > _capacity:
-		_capacity = maxi(128, maxi(entries.size(), _capacity * 2))
+var _prepared_bounds: Rect2
+var _prepared_scale: float = 1.0
+
+func begin_prepare(count: int, scale: float, world_size: Vector2) -> void:
+	_prepared_scale = scale
+	_prepared_bounds = Rect2(Vector2.ZERO, world_size).grow(64.0 * maxf(scale, 1.0))
+	if count > _capacity:
+		var old_capacity: int = _capacity
+		_capacity = maxi(128, maxi(count, _capacity * 2))
 		_buffer.resize(_capacity * INSTANCE_FLOATS)
-		_buffer.fill(0.0)
-		for index: int in _capacity:
+		for index: int in range(old_capacity, _capacity):
 			_buffer[index * INSTANCE_FLOATS] = 1.0
 			_buffer[index * INSTANCE_FLOATS + 5] = 1.0
+
+func prepare_entry(index: int, entry: WorldPresentation.DrawEntry) -> void:
+	var offset: int = index * INSTANCE_FLOATS
+	_buffer[offset + TRANSLATION_X] = entry.foot.x
+	_buffer[offset + TRANSLATION_Y] = entry.foot.y
+	_buffer[offset + CUSTOM_START] = entry.clip_index
+	_buffer[offset + CUSTOM_START + 1] = entry.local_animation_ms
+	_buffer[offset + CUSTOM_START + 2] = entry.tint.a
+	_buffer[offset + CUSTOM_START + 3] = _prepared_scale
+	_prepared_bounds = _prepared_bounds.merge(entry.area)
+
+## One non-preemptible engine upload, after cooperative preparation completes.
+## Allocation stays here so a growing back buffer cannot erase the front image.
+func commit(count: int) -> void:
+	if _instances.instance_count != _capacity:
 		_instances.instance_count = _capacity
-	# Shaders expand a unit quad. Explicit bounds avoid stale automatic culling;
-	# include displayed captures and edge sprites, not just active world bounds.
-	var bounds := Rect2(Vector2.ZERO, world_size).grow(64.0 * maxf(scale, 1.0))
-	for index: int in entries.size():
-		var entry: WorldPresentation.DrawEntry = entries[index]
-		var offset: int = index * INSTANCE_FLOATS
-		_buffer[offset + TRANSLATION_X] = entry.foot.x
-		_buffer[offset + TRANSLATION_Y] = entry.foot.y
-		_buffer[offset + CUSTOM_START] = entry.clip_index
-		_buffer[offset + CUSTOM_START + 1] = entry.local_animation_ms
-		_buffer[offset + CUSTOM_START + 2] = entry.tint.a
-		_buffer[offset + CUSTOM_START + 3] = scale
-		bounds = bounds.merge(entry.area)
-	_instances.custom_aabb = AABB(Vector3(bounds.position.x, bounds.position.y, -1), Vector3(bounds.size.x, bounds.size.y, 2))
-	_instances.visible_instance_count = entries.size()
-	if not entries.is_empty():
+	_instances.custom_aabb = AABB(Vector3(_prepared_bounds.position.x, _prepared_bounds.position.y, -1), Vector3(_prepared_bounds.size.x, _prepared_bounds.size.y, 2))
+	_instances.visible_instance_count = count
+	if count > 0:
 		_instances.buffer = _buffer
+
+func submit(entries: Array[WorldPresentation.DrawEntry], scale: float, world_size: Vector2) -> void:
+	begin_prepare(entries.size(), scale, world_size)
+	for index: int in entries.size():
+		prepare_entry(index, entries[index])
+	commit(entries.size())
 
 func _clip_texture(catalog: AnimationCatalog) -> ImageTexture:
 	var maximum_frames: int = 0

@@ -52,6 +52,7 @@ func setup(access: SimulationAccess, view: WorldPresentation, runner: Simulation
 	_camera.mode_changed.connect(func(_mode: ObserverCamera.Mode) -> void: refresh_panel())
 	_view.epoch_cleared.connect(_on_epoch_cleared)
 	_runner.frame_updated.connect(refresh_panel)
+	_runner.display_committed.connect(_on_display_committed)
 	hud.usable_rect_changed.connect(_camera.set_usable_rect)
 	apply_scenario(_access.scenario)
 	set_tool(Tool.SELECT)
@@ -313,3 +314,8 @@ func refresh_panel() -> void:
 	hud.tuning.refresh(_runner.paused)
 	if _access.probes.enabled:
 		_access.probes.record(Probes.Tag.HUD_REFRESH, Time.get_ticks_usec() - started_usec)
+
+func _on_display_committed() -> void:
+	# Input runs first. Reconcile the tiny grab preview after the atomic frame
+	# switch so a completed drop never draws both the body and its old preview.
+	_grab.update_state(_runner.paused)

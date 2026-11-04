@@ -2,13 +2,27 @@ class_name SimulationRunner
 extends Node
 ## Inline clock or frontend consumer of the worker clock. Engine.time_scale
 ## stays at 1; exactly one executor advances the world and retains backlog.
+signal display_committed
 signal frame_updated
 signal step_completed(elapsed_usec: int)
 var world: SimulationWorld
 var presentation: WorldPresentation
 var access: SimulationAccess
 var snapshot_age_msec: float = 0.0
-var _motion_publication_usec: int = 0
+# Cooperative frontend budget; engine submission and signal handlers are atomic.
+const FRONTEND_BUDGET_USEC: int = 5000
+const EVENT_BUDGET_USEC: int = 750
+const COMMIT_RESERVE_USEC: int = 500
+var event_usec: int = 0
+var prepare_usec: int = 0
+var commit_usec: int = 0
+var budget_overrun_usec: int = 0
+var display_sequence: int = -1
+var committed_frames: int = 0
+var skipped_display_states: int = 0
+var _front_job: PresentationJob
+var _back_job := PresentationJob.new()
+var _building: bool = false
 var paused: bool = false
 var pause_requested: bool:
 	get: return _pending_pause == 1 if _pending_pause >= 0 else paused
@@ -42,6 +56,8 @@ func setup(simulation: SimulationWorld, view: WorldPresentation) -> void:
 func setup_threaded(observer: SimulationAccess, view: WorldPresentation) -> void:
 	access = observer
 	presentation = view
+	process_priority = 30 # Observer tools (10) and camera (20) respond first.
+	access.delivery_completed.connect(_on_delivery)
 	_last_usec = Time.get_ticks_usec()
 
 func _exit_tree() -> void:
@@ -156,42 +172,74 @@ func _process_publications() -> void:
 	_ui_seconds += elapsed
 	frame_phase_usec.fill(0)
 	last_step_count = 0
-	# Bounded frontend work; a busy worker never forces a join. Old snapshots
-	# remain visible with their age instead of extrapolating uncomputed movement.
-	for index: int in 4:
-		if index > 0 and Time.get_ticks_usec() - started >= 3000:
-			break
-		var next: SimulationPublication = access.executor.poll()
-		if next == null:
-			break
-		var prior_tick: int = access.tick
-		var prior_epoch: int = access.store.epoch
-		var was_paused: bool = paused
+	event_usec = 0
+	prepare_usec = 0
+	commit_usec = 0
+	access.pump_events(started + EVENT_BUDGET_USEC)
+	event_usec = Time.get_ticks_usec() - started
+	var next: SimulationPublication = access.executor.poll_state(access.delivered_sequence)
+	if next != null:
 		access.adopt(next)
-		paused = next.paused
+	if access.control_status != null:
+		paused = access.control_status.paused
+		speed = access.control_status.speed
+		accumulator_seconds = access.control_status.backlog_seconds
 		if not access.has_pending_control(SimulationCommand.Kind.PAUSE):
 			_pending_pause = -1
-		speed = next.speed
-		accumulator_seconds = next.backlog_seconds
-		presentation.bind_publication(access)
-		access.deliver_captures()
-		presentation.observe_published(next.tick)
-		if next.tick > prior_tick or prior_epoch != access.store.epoch:
-			_motion_publication_usec = next.published_usec
-			_display_current_until_step = false
-			last_step_count += 1
-			for phase: int in 7:
-				frame_phase_usec[phase] += next.phase_usec[phase]
-		elif was_paused and not paused:
-			_display_current_until_step = true
-	var now: int = Time.get_ticks_usec()
-	snapshot_age_msec = float(now - _motion_publication_usec) / 1000.0 if _motion_publication_usec > 0 else 0.0
-	var alpha: float = clampf(float(now - _motion_publication_usec) / (access.config.fixed_dt * 1000000.0), 0.0, 1.0)
-	presentation.present(access.tick, alpha, paused or _display_current_until_step)
-	cpu_frame_msec = float(Time.get_ticks_usec() - started) / 1000.0
-	if _ui_seconds >= 0.2:
+	# Cancel an obsolete epoch before it can become the front frame.
+	if _building and _back_job.source.epoch != access.store.epoch:
+		_building = false
+	var preparation_start: int = Time.get_ticks_usec()
+	var preparation_deadline: int = started + FRONTEND_BUDGET_USEC - COMMIT_RESERVE_USEC
+	if access.publication.completed_usec > 0 and preparation_start < preparation_deadline:
+		if not _building:
+			var age_usec: int = preparation_start - access.publication.completed_usec
+			var alpha: float = clampf(float(age_usec) / (access.config.fixed_dt * 1000000.0), 0.0, 1.0)
+			_back_job.begin(presentation, access.publication, alpha, paused)
+			_building = true
+		_back_job.advance(preparation_deadline)
+	prepare_usec = Time.get_ticks_usec() - preparation_start
+	if _building and _back_job.phase == PresentationJob.Phase.READY and Time.get_ticks_usec() <= preparation_deadline:
+		var commit_start: int = Time.get_ticks_usec()
+		presentation.commit_job(_back_job)
+		access.acknowledge_display(_back_job.source.sequence)
+		var previous_front: PresentationJob = _front_job
+		_front_job = _back_job
+		_back_job = previous_front if previous_front != null else PresentationJob.new()
+		_building = false
+		if display_sequence >= 0:
+			skipped_display_states += maxi(0, _front_job.source.sequence - display_sequence - 1)
+		display_sequence = _front_job.source.sequence
+		committed_frames += 1
+		display_committed.emit()
+		commit_usec = Time.get_ticks_usec() - commit_start
+	presentation.render_build_usec = prepare_usec + commit_usec
+	# HUD work shares the allowance and can wait until another frame.
+	if _ui_seconds >= 0.2 and Time.get_ticks_usec() < preparation_deadline:
 		_ui_seconds = 0.0
 		frame_updated.emit()
+	var now: int = Time.get_ticks_usec()
+	snapshot_age_msec = display_age_msec(now)
+	cpu_frame_msec = float(now - started) / 1000.0
+	budget_overrun_usec = maxi(0, now - started - FRONTEND_BUDGET_USEC)
+
+func display_age_msec(now_usec: int) -> float:
+	if _front_job == null:
+		return 0.0
+	var source: SimulationPublication = _front_job.source
+	var displayed_usec: float = source.completed_usec
+	if not _front_job.direct:
+		# Use the actual wall-clock endpoints, including slow or accelerated
+		# simulation. A nominal fixed_dt is not a wall duration under overload.
+		displayed_usec = lerpf(source.previous_completed_usec, source.completed_usec, _front_job.alpha)
+	return (now_usec - displayed_usec) / 1000.0
+
+func _on_delivery(metrics: SimulationTelemetry) -> void:
+	if metrics.step_usec <= 0:
+		return
+	last_step_count += 1
+	for phase: int in 7:
+		frame_phase_usec[phase] += metrics.phase_usec[phase]
 
 func _run_step() -> void:
 	var started: int = Time.get_ticks_usec()

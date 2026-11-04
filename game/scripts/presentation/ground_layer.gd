@@ -68,3 +68,17 @@ func _draw() -> void:
 	var texel_extent: Vector2 = _world_size / _cell_size
 	draw_texture_rect_region(_texture, Rect2(Vector2.ZERO, _world_size), Rect2(Vector2.ZERO, texel_extent))
 	draw_rect(Rect2(Vector2.ZERO, _world_size), EDGE, false, 3.0)
+
+## Adopt an already prepared back image; no cell walk at the commit boundary.
+func commit_image(resources: ResourceGrid, world_size: Vector2, image: Image, levels: PackedInt32Array) -> void:
+	var resized: bool = _image.get_size() != image.get_size()
+	_resources = resources
+	_world_size = world_size
+	_cell_size = resources.cell_size
+	_image = image
+	_levels = levels
+	if resized:
+		_texture = ImageTexture.create_from_image(image)
+	else:
+		_texture.update(image)
+	queue_redraw()

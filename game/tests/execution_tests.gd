@@ -15,11 +15,11 @@ func _check(condition: bool, message: String) -> void:
 		push_error(message)
 
 func _poll() -> void:
-	while true:
-		var publication: SimulationPublication = _access.executor.poll()
-		if publication == null:
-			return
+	_access.pump_events(Time.get_ticks_usec() + 3000)
+	var publication: SimulationPublication = _access.executor.poll_state(_access.delivered_sequence)
+	if publication != null:
 		_access.adopt(publication)
+		_access.acknowledge_display(publication.sequence)
 
 func _until(predicate: Callable, message: String) -> void:
 	var deadline: int = Time.get_ticks_usec() + 5000000
@@ -51,6 +51,16 @@ func _run() -> void:
 	_check(pinned.store.position_current == pinned_positions and pinned.tick == pinned_tick, "A retained publication is never overwritten")
 	_control(SimulationCommand.Kind.PAUSE, 1)
 	await _until(func() -> bool: return _access.publication.paused, "Pause confirms at a complete step boundary")
+	var before_receipt: int = _receipts.size()
+	var old_display_sequence: int = _access.publication.sequence
+	_control(SimulationCommand.Kind.SELECT)
+	var receipt_deadline: int = Time.get_ticks_usec() + 3000000
+	while _receipts.size() == before_receipt and Time.get_ticks_usec() < receipt_deadline:
+		_access.pump_events(Time.get_ticks_usec() + 750)
+		await process_frame
+	_check(_receipts.size() == before_receipt + 1, "Receipt delivery is independent of state adoption or rendering")
+	_check(_access.publication.sequence == old_display_sequence and _access.has_pending_control(SimulationCommand.Kind.SELECT), "Accepted effects keep their preview barrier until the display catches up")
+	await _until(func() -> bool: return not _access.has_pending_control(SimulationCommand.Kind.SELECT), "Committing the corresponding state clears the visual barrier")
 	var paused_tick: int = _access.tick
 	var handle: AgentHandle = _access.store.handle_at(0)
 	_access.queue_hold(handle)

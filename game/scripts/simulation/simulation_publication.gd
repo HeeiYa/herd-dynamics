@@ -1,10 +1,9 @@
 class_name SimulationPublication
-extends RefCounted
-## One immutable, complete publication. The bounded FIFO never overwrites a
-## reader or discards intermediate capture/command/animation observations.
-var sequence: int = 0
-var published_usec: int = 0
-var tick: int = 0
+extends SimulationTelemetry
+## Immutable display state. The mailbox may replace an unread version; facts
+## and receipts travel separately through SimulationDelivery.
+var previous_completed_usec: int = 0
+var poses: Array[PublishedPose] = []
 var store: AgentStore
 var intents: IntentBuffer
 var resources: ResourceGrid
@@ -15,34 +14,16 @@ var inspection: AgentInspection
 var counts := PackedInt32Array([0, 0, 0])
 var held_counts := PackedInt32Array([0, 0, 0])
 var capture_count: int = 0
-var tuning_values := PackedFloat64Array()
-var tuning_applied_count: int = 0
-var phase_usec := PackedInt64Array()
-var max_perception_delay_ticks: int = 0
-var max_decision_delay_ticks: int = 0
 var grid_max_occupancy: int = 0
 var grid_candidate_count: int = 0
 var motion_backend_status: String = "initializing"
 var planner_description: String = "正在生成"
-var missing_intents: int = 0
-var active_agents: int = 0
-var grass_consumed: float = 0.0
-var perception_cells: int = 0
-var motion_cells: int = 0
-var paused: bool = false
-var speed: float = 1.0
-var backlog_seconds: float = 0.0
-var step_usec: int = 0
-var snapshot_usec: int = 0
-var ai_used_usec: int = 0
-var receipts: Array[SimulationCommand.Receipt] = []
-var captures: Array[CaptureEvent] = []
-var observer_events: Array[Dictionary] = []
 
 static func capture(world: SimulationWorld, selected: AgentHandle) -> SimulationPublication:
 	var started: int = Time.get_ticks_usec()
 	var result := SimulationPublication.new()
 	result.tick = world.tick
+	result.epoch = world.store.epoch
 	result.store = world.store.publication_copy()
 	result.intents = world.intents.publication_copy()
 	result.config = world.config.duplicate() as SimulationConfig
@@ -74,4 +55,30 @@ static func capture(world: SimulationWorld, selected: AgentHandle) -> Simulation
 		if world.intents.get_intent(world.store.handle_at(dense), world.tick) == null:
 			result.missing_intents += 1
 	result.snapshot_usec = Time.get_ticks_usec() - started
+	return result
+
+func telemetry_copy() -> SimulationTelemetry:
+	var result := SimulationTelemetry.new()
+	result.sequence = sequence
+	result.epoch = epoch
+	result.tick = tick
+	result.published_usec = published_usec
+	result.completed_usec = completed_usec
+	result.paused = paused
+	result.speed = speed
+	result.backlog_seconds = backlog_seconds
+	result.step_usec = step_usec
+	result.snapshot_usec = snapshot_usec
+	result.pose_usec = pose_usec
+	result.ai_used_usec = ai_used_usec
+	result.phase_usec = phase_usec
+	result.active_agents = active_agents
+	result.missing_intents = missing_intents
+	result.max_perception_delay_ticks = max_perception_delay_ticks
+	result.max_decision_delay_ticks = max_decision_delay_ticks
+	result.grass_consumed = grass_consumed
+	result.perception_cells = perception_cells
+	result.motion_cells = motion_cells
+	result.tuning_values = tuning_values
+	result.tuning_applied_count = tuning_applied_count
 	return result

@@ -8,7 +8,18 @@ signal observer_reset(epoch: int)
 signal observer_event(record: Dictionary)
 signal command_completed(receipt: SimulationCommand.Receipt)
 signal command_rejected(message: String)
-signal publication_received(snapshot: SimulationPublication)
+signal delivery_completed(metrics: SimulationTelemetry)
+signal notice_delivered(sequence: int, index: int, notice: SimulationNotice)
+signal capture_presented(event: CaptureEvent, previous: PublishedPose)
+signal behavior_presented(notice: SimulationNotice)
+var observer_event_ready: Callable
+var delivered_sequence: int = -1
+var skipped_states: int = 0
+var control_status: SimulationTelemetry
+var _delivery: SimulationDelivery
+var _notice_index: int = 0
+var _awaiting_state: Dictionary[int, SimulationCommand] = {}
+var _state_sequences: Dictionary[int, int] = {}
 var executor: SimulationExecutor
 var publication: SimulationPublication
 var probes: Probes
@@ -91,16 +102,68 @@ func close() -> void:
 	if executor == null:
 		return
 	executor.close()
-	# At shutdown, deliver accepted/rejected operations and applied event records
-	# before the session log closes. No rendering or waiting occurs in frame code.
 	while true:
-		var final_publication: SimulationPublication = executor.poll()
-		if final_publication == null:
+		var progressed: bool = pump_events(9223372036854775807)
+		if not progressed and _delivery == null:
 			break
-		adopt(final_publication)
+		if not progressed:
+			OS.delay_msec(1) # Shutdown only; allow the evidence writer to drain.
+	var latest: SimulationPublication = executor.poll_state(delivered_sequence)
+	if latest != null:
+		adopt(latest)
+		acknowledge_display(latest.sequence)
+
+## Each notice is a cooperative unit; never waits for the worker. Delivery and
+## command completion do not depend on finishing a display frame.
+func pump_events(deadline_usec: int) -> bool:
+	var progressed: bool = false
+	while Time.get_ticks_usec() < deadline_usec:
+		if _delivery == null:
+			_delivery = executor.poll_delivery()
+			if _delivery == null:
+				break
+			assert(_delivery.sequence == delivered_sequence + 1, "Reliable delivery must be contiguous")
+			_notice_index = 0
+		if _notice_index < _delivery.notices.size():
+			var notice: SimulationNotice = _delivery.notices[_notice_index]
+			if notice.kind == SimulationNotice.Kind.OBSERVER and observer_event_ready.is_valid() and not observer_event_ready.call():
+				break
+			_deliver_notice(notice, _delivery.sequence)
+			_notice_index += 1
+			progressed = true
+			continue
+		delivered_sequence = _delivery.sequence
+		control_status = _delivery.metrics
+		delivery_completed.emit(control_status)
+		_delivery = null
+		progressed = true
+	return progressed
+
+func _deliver_notice(notice: SimulationNotice, sequence: int) -> void:
+	notice_delivered.emit(sequence, _notice_index, notice)
+	match notice.kind:
+		SimulationNotice.Kind.RECEIPT:
+			var receipt: SimulationCommand.Receipt = notice.receipt
+			var command: SimulationCommand = _pending.get(receipt.request_id)
+			assert(command != null, "Receipt must match one outstanding command")
+			_pending.erase(receipt.request_id)
+			if receipt.accepted:
+				_awaiting_state[receipt.request_id] = command
+				_state_sequences[receipt.request_id] = sequence
+			command_completed.emit(receipt)
+			if not receipt.accepted and receipt.reason not in ["cancelled_by_observer", "discarded_by_reset"]:
+				command_rejected.emit("操作未生效：目标或场景已经变化（%s）" % receipt.reason)
+		SimulationNotice.Kind.OBSERVER:
+			observer_event.emit(notice.observer)
+		SimulationNotice.Kind.CAPTURE:
+			capture_presented.emit(notice.capture, notice.pose)
+			captured.emit(notice.capture)
+		SimulationNotice.Kind.BEHAVIOR:
+			behavior_presented.emit(notice)
 
 func adopt(next: SimulationPublication) -> void:
-	assert(next.sequence == _last_sequence + 1, "Publication/event FIFO must not skip or duplicate a sequence")
+	assert(next.sequence > _last_sequence and next.sequence <= delivered_sequence)
+	skipped_states += maxi(0, next.sequence - _last_sequence - 1)
 	_last_sequence = next.sequence
 	var old_epoch: int = store.epoch
 	publication = next
@@ -110,25 +173,16 @@ func adopt(next: SimulationPublication) -> void:
 	tuning.applied_count = publication.tuning_applied_count
 	if old_epoch != store.epoch:
 		observer_reset.emit(store.epoch)
-	var completed_world_command: bool = false
-	for receipt: SimulationCommand.Receipt in publication.receipts:
-		var command: SimulationCommand = _pending.get(receipt.request_id)
-		if command == null:
-			continue
-		completed_world_command = completed_world_command or command.kind in [SimulationCommand.Kind.HOLD, SimulationCommand.Kind.DROP, SimulationCommand.Kind.CANCEL_GRAB, SimulationCommand.Kind.PLACE, SimulationCommand.Kind.TUNING]
-		_pending.erase(receipt.request_id)
-		command_completed.emit(receipt)
-		if not receipt.accepted and receipt.reason not in ["cancelled_by_observer", "discarded_by_reset"]:
-			command_rejected.emit("操作未生效：目标或场景已经变化（%s）" % receipt.reason)
-	if completed_world_command and not has_pending_tuning():
-		observer_commands_applied.emit(tick)
-	for event: Dictionary in publication.observer_events:
-		observer_event.emit(event)
-	publication_received.emit(next)
 
-func deliver_captures() -> void:
-	for event: CaptureEvent in publication.captures:
-		captured.emit(event)
+func acknowledge_display(sequence: int) -> void:
+	var applied: bool = false
+	for request_id: int in _awaiting_state.keys():
+		if _state_sequences[request_id] <= sequence:
+			_awaiting_state.erase(request_id)
+			_state_sequences.erase(request_id)
+			applied = true
+	if applied and not has_pending_tuning():
+		observer_commands_applied.emit(tick)
 
 func inspect(handle: AgentHandle) -> AgentInspection:
 	if _local != null:
@@ -147,7 +201,7 @@ func submit(command: SimulationCommand) -> bool:
 	if not _valid_command(command):
 		command_rejected.emit("操作参数无效")
 		return false
-	if _pending.size() >= SimulationExecutor.COMMAND_LIMIT:
+	if _pending.size() + _awaiting_state.size() >= SimulationExecutor.COMMAND_LIMIT:
 		command_rejected.emit("待处理操作已满，请稍后重试")
 		return false
 	command.request_id = _next_request
@@ -184,7 +238,7 @@ func _valid_command(command: SimulationCommand) -> bool:
 	return true
 
 func has_pending_control(kind: SimulationCommand.Kind) -> bool:
-	for command: SimulationCommand in _pending.values():
+	for command: SimulationCommand in _pending.values() + _awaiting_state.values():
 		if command.kind == kind:
 			return true
 	return false
@@ -251,7 +305,7 @@ func queue_tuning(change: TuningCatalog.Change) -> bool:
 func is_hold_pending(handle: AgentHandle) -> bool:
 	if _local != null:
 		return _local.is_hold_pending(handle)
-	for command: SimulationCommand in _pending.values():
+	for command: SimulationCommand in _pending.values() + _awaiting_state.values():
 		if command.handle != null and command.handle.same_life(handle) and command.kind in [SimulationCommand.Kind.HOLD, SimulationCommand.Kind.DROP, SimulationCommand.Kind.CANCEL_GRAB]:
 			return true
 	return false
@@ -259,7 +313,7 @@ func is_hold_pending(handle: AgentHandle) -> bool:
 func has_pending_tuning() -> bool:
 	if _local != null:
 		return _local.has_pending_tuning()
-	for command: SimulationCommand in _pending.values():
+	for command: SimulationCommand in _pending.values() + _awaiting_state.values():
 		if command.kind == SimulationCommand.Kind.TUNING:
 			return true
 	return false

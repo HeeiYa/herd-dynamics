@@ -58,7 +58,8 @@ func setup(world: SimulationAccess, view: WorldPresentation) -> void:
 	_font = UiStyle.interface_theme().default_font
 	z_index = 5
 	_view.behavior_changed.connect(_on_behavior_changed)
-	_view.epoch_cleared.connect(clear)
+	_view.epoch_cleared.connect(_clear_old_epochs)
+	_world.behavior_presented.connect(_on_reliable_behavior)
 	_world.captured.connect(_on_captured)
 
 func clear() -> void:
@@ -135,7 +136,7 @@ func _add_mark(handle: AgentHandle, kind: MarkKind, position: Vector2, tick: int
 func refresh() -> void:
 	var now: float = _view.display_tick
 	for index: int in range(_marks.size() - 1, -1, -1):
-		if now - _marks[index].tick > MARK_TICKS:
+		if _marks[index].handle.world_epoch == _view._epoch and now - _marks[index].tick > MARK_TICKS:
 			_marks.remove_at(index)
 	queue_redraw()
 
@@ -212,6 +213,8 @@ func _draw_known_target(context: AgentInspection, target: AgentHandle, foot: Vec
 func _draw_marks(pixel: float) -> void:
 	var now: float = _view.display_tick
 	for mark: Mark in _marks:
+		if mark.handle.world_epoch != _view._epoch:
+			continue
 		var age: float = now - mark.tick
 		if age < 0.0:
 			continue
@@ -301,3 +304,21 @@ func _label(position: Vector2, text: String, color: Color, pixel: float) -> void
 	draw_string_outline(_font, Vector2.ZERO, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, 4, Color(0.15, 0.12, 0.08, 0.75 * color.a))
 	draw_string(_font, Vector2.ZERO, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, color)
 	draw_set_transform(Vector2.ZERO)
+
+func _on_reliable_behavior(notice: SimulationNotice) -> void:
+	if not show_marks or notice.held:
+		return
+	var pose: PublishedPose = notice.pose
+	var kind: int = _mark_for(pose.species, notice.previous_behavior, pose.behavior)
+	if kind >= 0:
+		_add_mark(pose.handle, kind as MarkKind, notice.position, notice.tick)
+
+func _clear_old_epochs() -> void:
+	# New-epoch events can arrive before its first completed display frame.
+	for index: int in range(_marks.size() - 1, -1, -1):
+		if _marks[index].handle.world_epoch != _view._epoch:
+			_marks.remove_at(index)
+	for slot: int in _last_mark.keys():
+		if _last_mark[slot].handle.world_epoch != _view._epoch:
+			_last_mark.erase(slot)
+	hovered = null

@@ -7,7 +7,8 @@ const COMMAND_LIMIT: int = 256
 var _thread := Thread.new()
 var _mutex := Mutex.new()
 var _commands: Array[SimulationCommand] = []
-var _publications: Array[SimulationPublication] = []
+var _deliveries: Array[SimulationDelivery] = []
+var _latest: SimulationPublication
 var _stop_requested: bool = false
 var _config: SimulationConfig
 var _initial: ScenarioConfig
@@ -20,10 +21,12 @@ var _single_steps: int = 0
 var _step_requests: Array[SimulationCommand] = []
 var _selected: AgentHandle
 var _sequence: int = 0
-var _receipts: Array[SimulationCommand.Receipt] = []
 var _awaiting_step: Array[SimulationCommand] = []
-var _captures: Array[CaptureEvent] = []
-var _events: Array[Dictionary] = []
+var _notices: Array[SimulationNotice] = []
+var _poses: Array[PublishedPose] = []
+var _pose_epoch: int = -1
+var _motion_completed_usec: int = 0
+var _previous_motion_completed_usec: int = 0
 
 func start(config: SimulationConfig, scenario: ScenarioConfig) -> Error:
 	_config = config.duplicate() as SimulationConfig
@@ -40,10 +43,20 @@ func enqueue(command: SimulationCommand) -> bool:
 	_mutex.unlock()
 	return accepted
 
-func poll() -> SimulationPublication:
+func poll_delivery() -> SimulationDelivery:
 	if not _mutex.try_lock():
 		return null
-	var result: SimulationPublication = _publications.pop_front() if not _publications.is_empty() else null
+	var result: SimulationDelivery = _deliveries.pop_front() if not _deliveries.is_empty() else null
+	_mutex.unlock()
+	return result
+
+func poll_state(delivered_sequence: int) -> SimulationPublication:
+	if not _mutex.try_lock():
+		return null
+	var result: SimulationPublication
+	if _latest != null and _latest.sequence <= delivered_sequence:
+		result = _latest
+		_latest = null
 	_mutex.unlock()
 	return result
 
@@ -58,8 +71,8 @@ func close() -> void:
 
 func _run() -> void:
 	var world := SimulationWorld.new()
-	world.captured.connect(func(event: CaptureEvent) -> void: _captures.append(event))
-	world.observer_event.connect(func(event: Dictionary) -> void: _events.append(event.duplicate(true)))
+	world.captured.connect(_capture_notice)
+	world.observer_event.connect(_observer_notice)
 	world.setup(_config, _initial)
 	_publish(world, 0)
 	var last_usec: int = Time.get_ticks_usec()
@@ -67,14 +80,14 @@ func _run() -> void:
 	while true:
 		_mutex.lock()
 		var stopping: bool = _stop_requested
-		var room: bool = _publications.size() < PUBLICATION_LIMIT
+		var room: bool = _deliveries.size() < PUBLICATION_LIMIT
 		var commands: Array[SimulationCommand] = _commands
 		_commands = []
 		_mutex.unlock()
 		if stopping:
 			for pending: SimulationCommand in commands + _awaiting_step + _step_requests:
 				_receipt(pending, world, false, "executor_closed")
-			if not _receipts.is_empty() or not _events.is_empty():
+			if not _notices.is_empty():
 				_publish(world, 0, true)
 			break
 		var now: int = Time.get_ticks_usec()
@@ -106,7 +119,7 @@ func _run() -> void:
 				consecutive_steps = 0
 				OS.delay_msec(1)
 		else:
-			if control_changed or not _receipts.is_empty():
+			if control_changed or not _notices.is_empty():
 				_publish(world, 0)
 			consecutive_steps = 0
 			OS.delay_msec(1)
@@ -204,25 +217,83 @@ func _receipt(command: SimulationCommand, world: SimulationWorld, accepted: bool
 	receipt.reason = reason
 	receipt.submitted_usec = command.submitted_usec
 	receipt.completed_usec = Time.get_ticks_usec()
-	_receipts.append(receipt)
+	var notice := SimulationNotice.new()
+	notice.kind = SimulationNotice.Kind.RECEIPT
+	notice.receipt = receipt
+	_notices.append(notice)
+
+func _capture_notice(event: CaptureEvent) -> void:
+	var notice := SimulationNotice.new()
+	notice.kind = SimulationNotice.Kind.CAPTURE
+	notice.capture = event
+	if event.target.slot < _poses.size():
+		var pose: PublishedPose = _poses[event.target.slot]
+		if pose != null and pose.handle.same_life(event.target):
+			notice.pose = pose
+	_notices.append(notice)
+
+func _observer_notice(event: Dictionary) -> void:
+	var notice := SimulationNotice.new()
+	notice.kind = SimulationNotice.Kind.OBSERVER
+	notice.observer = event.duplicate(true)
+	_notices.append(notice)
+
+func _sample_poses(world: SimulationWorld, publication: SimulationPublication) -> void:
+	if _pose_epoch != world.store.epoch:
+		_poses.clear()
+		_pose_epoch = world.store.epoch
+	_poses.resize(world.store.capacity)
+	for dense: int in world.store.count:
+		var handle: AgentHandle = world.store.handle_at(dense)
+		var previous: PublishedPose = _poses[handle.slot]
+		var pose: PublishedPose = PublishedPose.sample(world, dense, previous)
+		var old_behavior: int = previous.behavior if previous != null and previous.handle.same_life(handle) else SimTypes.Behavior.IDLE
+		if pose.behavior != old_behavior:
+			var notice := SimulationNotice.new()
+			notice.kind = SimulationNotice.Kind.BEHAVIOR
+			notice.pose = pose
+			notice.position = world.store.position_current[dense]
+			notice.previous_behavior = old_behavior
+			notice.tick = maxi(0, world.tick - 1)
+			notice.held = world.store.held[dense] != 0
+			_notices.append(notice)
+		_poses[handle.slot] = pose
+		publication.poses.append(pose)
 
 func _publish(world: SimulationWorld, step_usec: int, closing: bool = false) -> void:
+	var completed_usec: int = Time.get_ticks_usec()
 	var publication: SimulationPublication = SimulationPublication.capture(world, _selected)
+	if _motion_completed_usec == 0 or _pose_epoch != world.store.epoch:
+		_previous_motion_completed_usec = completed_usec
+		_motion_completed_usec = completed_usec
+	elif step_usec > 0:
+		_previous_motion_completed_usec = _motion_completed_usec
+		_motion_completed_usec = completed_usec
+	var pose_started: int = Time.get_ticks_usec()
+	_sample_poses(world, publication)
+	publication.pose_usec = Time.get_ticks_usec() - pose_started
+	publication.completed_usec = _motion_completed_usec
+	publication.previous_completed_usec = _previous_motion_completed_usec
 	publication.sequence = _sequence
 	_sequence += 1
 	publication.paused = _paused
 	publication.speed = _speed
 	publication.backlog_seconds = _accumulator_seconds
 	publication.step_usec = step_usec
-	publication.receipts = _receipts
-	publication.captures = _captures
-	publication.observer_events = _events
-	_receipts = []
-	_captures = []
-	_events = []
 	publication.published_usec = Time.get_ticks_usec()
+	publication.snapshot_usec = publication.published_usec - completed_usec
+	var delivery := SimulationDelivery.new()
+	delivery.sequence = publication.sequence
+	delivery.notices = _notices
+	delivery.metrics = publication.telemetry_copy()
+	_notices = []
 	_mutex.lock()
 	# One final receipt-only publication may follow the full queue during close.
-	assert(_publications.size() < PUBLICATION_LIMIT or closing)
-	_publications.append(publication)
+	assert(_deliveries.size() < PUBLICATION_LIMIT or closing)
+	_deliveries.append(delivery)
+	# Release an overwritten full state outside the mailbox lock. Destruction
+	# can walk many reference-counted records; input enqueue must not wait on it.
+	var replaced: SimulationPublication = _latest
+	_latest = publication
 	_mutex.unlock()
+	replaced = null

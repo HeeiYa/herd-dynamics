@@ -150,6 +150,7 @@ func _resolve_capture(request: AttackRequest, tick: int) -> void:
 	event.actor = request.actor
 	event.target = request.target
 	event.position = _store.position_next[target_dense]
+	event.previous_position = _store.position_current[target_dense]
 	event.facing = _store.facing[target_dense]
 	event.tick = tick + 1
 	_store.mark_dead(request.target)

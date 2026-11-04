@@ -24,7 +24,7 @@ func _ready() -> void:
 				queue_free()
 				return
 	RenderingServer.set_default_clear_color(UiStyle.BACKDROP)
-	# Run after the runner so tools and overlays see this frame's publication.
+	# Tools respond before the budgeted worker presentation pass.
 	process_priority = 10
 	call_deferred("_initialize")
 
@@ -70,6 +70,8 @@ func _initialize() -> void:
 	_view.setup(_access.store, _access.intents, _access.resources, _access.config)
 	_view.set_seed(_access.scenario.random_seed)
 	_access.captured.connect(_on_capture)
+	if use_worker:
+		_access.capture_presented.connect(_view.queue_reliable_capture)
 	_insight = InsightOverlay.new()
 	add_child(_insight)
 	_insight.setup(_access, _view)
@@ -98,4 +100,5 @@ func _exit_tree() -> void:
 		_session_log.close()
 
 func _on_capture(event: CaptureEvent) -> void:
-	_view.add_capture(event.target, event.position, event.facing, event.tick)
+	if _access.executor == null:
+		_view.add_capture(event.target, event.position, event.facing, event.tick)
