@@ -8,6 +8,7 @@ const ACTOR_FLOATS: int = 20
 const RESULT_FLOATS: int = 12
 const BYTES_PER_FLOAT: int = 4
 enum LifeState { DEAD, HELD, ACTIVE }
+const NO_INTENT_RECORD := Vector4(0.0, 0.0, 0.0, -1.0)
 enum ActorColumn {
 	POSITION_X, POSITION_Y, VELOCITY_X, VELOCITY_Y,
 	DESTINATION_X, DESTINATION_Y, SPEED, RADIUS,
@@ -64,6 +65,15 @@ var _identity_directions := PackedVector2Array()
 var _cached_store: AgentStore
 var _cached_life_revision: int = -1
 var _cached_epoch: int = -1
+# Private dense projections are valid only under the bound store lifecycle.
+# They never leave this kernel or retain a MotionIntent/publication reference.
+var _input_handles: Array[AgentHandle] = []
+var _input_life_states := PackedByteArray()
+var _input_versions := PackedInt64Array()
+var _input_expires_ticks := PackedInt64Array()
+var _input_retreats := PackedByteArray()
+var _cached_intents: IntentBuffer
+var _last_input_tick: int = -1
 
 func initialize() -> bool:
 	_device = RenderingServer.create_local_rendering_device()
@@ -228,26 +238,36 @@ func run(store: AgentStore, intents: IntentBuffer, field: CrowdMotionField, conf
 func _pack_bulk(store: AgentStore, intents: IntentBuffer, field: CrowdMotionField, config: SimulationConfig, tick: int) -> PackedByteArray:
 	_refresh_identity_directions(store)
 	var rows_started: int = Time.get_ticks_usec()
-	_intent_records.resize(store.capacity)
+	if _cached_intents != intents or tick < _last_input_tick:
+		# Live world time is monotonic within an epoch. Explicit rewind also
+		# invalidates null-at-expiry entries for fixed-input diagnostic replays.
+		_input_versions.fill(-1)
+		_cached_intents = intents
+	_last_input_tick = tick
+	# The owner's version column is borrowed only for this fixed phase; the
+	# cache stores scalar stamps, never the returned shared Packed array.
+	var versions: PackedInt64Array = intents.mutation_versions_for_slots(store.capacity)
 	_phase_flags.resize(store.capacity)
 	field_agent_count = 0
 	exact_agent_count = 0
 	for dense: int in store.count:
-		var life_state: LifeState = LifeState.DEAD
-		if store.alive[dense] != 0:
-			life_state = LifeState.HELD if store.held[dense] != 0 else LifeState.ACTIVE
-		var intent: MotionIntent = intents.get_intent(store.handle_at(dense), tick) if life_state == LifeState.ACTIVE else null
+		var life_state: LifeState = _input_life_states[dense] as LifeState
+		if life_state == LifeState.ACTIVE:
+			var version: int = versions[store.dense_to_slot[dense]]
+			if _input_versions[dense] != version:
+				_project_changed_intent(dense, intents, tick, version)
+			elif tick >= _input_expires_ticks[dense] and _intent_records[dense].w >= 0.0:
+				# Expiry does not require a write to the intent buffer. Clear the
+				# submitted record once; the raw intent remains owned by its buffer.
+				_intent_records[dense] = NO_INTENT_RECORD
+				_input_retreats[dense] = 0
+		var mode: int = int(_intent_records[dense].w)
 		var use_field: bool = false
-		if intent != null and intent.mode != SimTypes.IntentMode.STOP:
+		if life_state == LifeState.ACTIVE and mode >= 0 and mode != SimTypes.IntentMode.STOP:
 			use_field = field.uses_dense_sample(dense, config.neighbor_radius, config.crowd_enter_count, config.crowd_exit_count)
 			field_agent_count += int(use_field)
 			exact_agent_count += int(not use_field)
-		if intent == null:
-			_intent_records[dense] = Vector4(0.0, 0.0, 0.0, -1.0)
-		else:
-			_intent_records[dense] = Vector4(intent.destination.x, intent.destination.y, intent.speed, intent.mode)
-		var retreat: bool = intent != null and intent.behavior == SimTypes.Behavior.RETREAT
-		_phase_flags[dense] = Vector4(life_state, float(use_field), float(retreat), 0.0)
+		_phase_flags[dense] = Vector4(life_state, float(use_field), float(_input_retreats[dense]), 0.0)
 	bulk_rows_usec += Time.get_ticks_usec() - rows_started
 	var columns_started: int = Time.get_ticks_usec()
 	# Word offsets (C = store.capacity) match gpu_motion_pack.glsl/pack_actor:
@@ -267,14 +287,44 @@ func _pack_bulk(store: AgentStore, intents: IntentBuffer, field: CrowdMotionFiel
 	bulk_columns_usec += Time.get_ticks_usec() - columns_started
 	return bytes
 
+func _project_changed_intent(dense: int, intents: IntentBuffer, tick: int, version: int) -> void:
+	# Refreshes always pass the existing complete identity and TTL lookup.
+	# The canonical handle belongs to this exact store/lifecycle projection.
+	var intent: MotionIntent = intents.get_intent(_input_handles[dense], tick)
+	if intent == null:
+		_intent_records[dense] = NO_INTENT_RECORD
+		_input_expires_ticks[dense] = -1
+		_input_retreats[dense] = 0
+	else:
+		_intent_records[dense] = Vector4(intent.destination.x, intent.destination.y, intent.speed, intent.mode)
+		_input_expires_ticks[dense] = intent.expires_tick
+		_input_retreats[dense] = int(intent.behavior == SimTypes.Behavior.RETREAT)
+	_input_versions[dense] = version
+
 func _refresh_identity_directions(store: AgentStore) -> void:
 	# Dense projection is valid only for this store's complete lifecycle revision.
 	# Swap deletion, slot reuse, reset and held changes all invalidate it.
 	if _cached_store == store and _cached_life_revision == store.life_revision and _cached_epoch == store.epoch:
 		return
 	_identity_directions.resize(store.capacity)
+	_input_handles.resize(store.count)
+	_input_life_states.resize(store.capacity)
+	_input_versions.resize(store.capacity)
+	_input_expires_ticks.resize(store.capacity)
+	_input_retreats.resize(store.capacity)
+	_intent_records.resize(store.capacity)
+	_input_versions.fill(-1)
 	for dense: int in store.count:
-		_identity_directions[dense] = CrowdMotionField.identity_direction(store.handle_at(dense))
+		var handle: AgentHandle = store.handle_at(dense)
+		_input_handles[dense] = handle
+		_identity_directions[dense] = CrowdMotionField.identity_direction(handle)
+		var life_state: LifeState = LifeState.DEAD
+		if store.alive[dense] != 0:
+			life_state = LifeState.HELD if store.held[dense] != 0 else LifeState.ACTIVE
+		_input_life_states[dense] = life_state
+		_intent_records[dense] = NO_INTENT_RECORD
+		_input_expires_ticks[dense] = -1
+		_input_retreats[dense] = 0
 	_cached_store = store
 	_cached_life_revision = store.life_revision
 	_cached_epoch = store.epoch
@@ -375,6 +425,14 @@ func close() -> void:
 	_cached_store = null
 	_cached_life_revision = -1
 	_cached_epoch = -1
+	_cached_intents = null
+	_last_input_tick = -1
+	_input_handles.clear()
+	_input_life_states.clear()
+	_input_versions.clear()
+	_input_expires_ticks.clear()
+	_input_retreats.clear()
+	_intent_records.clear()
 	if _device == null:
 		return
 	_release_buffers()
