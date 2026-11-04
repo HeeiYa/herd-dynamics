@@ -5,6 +5,10 @@ var _intents: Array[MotionIntent] = []
 var _publication_records: Array[MotionIntent] = []
 var _changed_slots: Array[int] = []
 var _changed_flags := PackedByteArray()
+# Internal owner-thread mutation ledger. MotionIntent.revision may restart after
+# removal, so derived caches must use this monotonic stamp and complete life.
+var _mutation_serial: int = 0
+var _mutation_versions := PackedInt64Array()
 
 func _ensure_slot(slot: int) -> void:
 	assert(slot >= 0)
@@ -14,11 +18,24 @@ func _ensure_slot(slot: int) -> void:
 	_intents.resize(capacity)
 	_publication_records.resize(capacity)
 	_changed_flags.resize(capacity)
+	if _mutation_versions.size() < capacity:
+		_mutation_versions.resize(capacity)
 
 func _mark_changed(slot: int) -> void:
 	if _changed_flags[slot] == 0:
 		_changed_flags[slot] = 1
 		_changed_slots.append(slot)
+	_mutation_serial += 1
+	_mutation_versions[slot] = _mutation_serial
+
+## Read only during a fixed owner-thread phase. The caller must not write or
+## retain this column after that phase, or expose it in a publication. Do not
+## infer independent ownership from returning a Packed array. This ledger is
+## independent of publication_copy's drain.
+func mutation_versions_for_slots(slot_capacity: int) -> PackedInt64Array:
+	if _mutation_versions.size() < slot_capacity:
+		_mutation_versions.resize(slot_capacity)
+	return _mutation_versions
 
 ## Copies own their index array; changed records are cloned once and then shared
 ## read-only. The authoritative MotionIntent is never borrowed by the UI.
@@ -85,6 +102,8 @@ func remove(handle: AgentHandle) -> void:
 		_mark_changed(handle.slot)
 
 func clear() -> void:
+	_mutation_serial += 1
+	_mutation_versions.fill(_mutation_serial)
 	_intents.clear()
 	_publication_records.clear()
 	_changed_slots.clear()

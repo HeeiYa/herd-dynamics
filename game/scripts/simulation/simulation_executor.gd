@@ -28,6 +28,11 @@ var _poses: Array[PublishedPose] = []
 var _pose_histories: Array[PublishedPose.History] = []
 var _pose_buffers: Array[PoseBuffer] = []
 var _pose_epoch: int = -1
+var _pose_intent_source: IntentBuffer
+var _pose_intent_epoch: int = -1
+var _pose_intent_handles: Array[AgentHandle] = []
+var _pose_intent_records: Array[MotionIntent] = []
+var _pose_intent_versions := PackedInt64Array()
 var _motion_completed_usec: int = 0
 var _previous_motion_completed_usec: int = 0
 var _pose_sample_count: int = 0
@@ -430,8 +435,22 @@ func _acquire_pose_buffer(count: int, publication: SimulationPublication) -> Pos
 		_pose_buffers.append(created)
 	return created
 
+func _prepare_pose_intents(store: AgentStore, intents: IntentBuffer) -> PackedInt64Array:
+	if intents != _pose_intent_source or store.epoch != _pose_intent_epoch:
+		_pose_intent_source = intents
+		_pose_intent_epoch = store.epoch
+		_pose_intent_handles.clear()
+		_pose_intent_records.clear()
+		_pose_intent_versions.clear()
+	if _pose_intent_handles.size() < store.capacity:
+		_pose_intent_handles.resize(store.capacity)
+		_pose_intent_records.resize(store.capacity)
+		_pose_intent_versions.resize(store.capacity)
+	return intents.mutation_versions_for_slots(store.capacity)
+
 func _sample_poses(world: SimulationWorld, publication: SimulationPublication) -> void:
 	var store: AgentStore = world.store
+	var intent_versions: PackedInt64Array = _prepare_pose_intents(store, world.intents)
 	if _pose_epoch != store.epoch:
 		_poses.clear()
 		_pose_histories.clear()
@@ -460,7 +479,23 @@ func _sample_poses(world: SimulationWorld, publication: SimulationPublication) -
 		if history == null:
 			history = PublishedPose.History.new()
 			_pose_histories[slot] = history
-		var intent: MotionIntent = world.intents.get_intent(handle, observed_tick)
+		var intent: MotionIntent
+		var intent_version: int = intent_versions[slot]
+		if _pose_intent_handles[slot] == handle and _pose_intent_versions[slot] == intent_version:
+			intent = _pose_intent_records[slot]
+		else:
+			# A new canonical life or mutation must pass the existing full lookup.
+			# Same-value external handles are validated there, never guessed here.
+			# A null caused by expiry stays null: tick is monotonic within an epoch.
+			# Reset changes the epoch before a new projection can move time back.
+			intent = world.intents.get_intent(handle, observed_tick)
+			_pose_intent_handles[slot] = handle
+			_pose_intent_versions[slot] = intent_version
+			_pose_intent_records[slot] = intent
+		# Cached records remain immutable, but their validity advances with the
+		# simulation clock even when no writer has touched the intent buffer.
+		if intent != null and observed_tick >= intent.expires_tick:
+			intent = null
 		if profile != null:
 			profile.lookup_usec += Time.get_ticks_usec() - part_started
 			part_started = Time.get_ticks_usec()
