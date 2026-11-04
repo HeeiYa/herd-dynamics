@@ -18,6 +18,7 @@ var _camera: ObserverCamera
 var _insight: InsightOverlay
 var _grab: GrabTool
 var _selected: AgentHandle
+var _performance := ObserverPerformance.new()
 var _tool: Tool = Tool.SELECT
 var _place_species: int = SimTypes.Species.DOG
 # Overview scale for benchmarks; 1.0 fits the whole pasture.
@@ -296,28 +297,46 @@ func refresh_panel() -> void:
 	hud.counts_label.text = count_text
 	var camera_text: String = ["总览", "自由", "跟随"][_camera.mode]
 	hud.time_label.text = "%s · %.1fs · 捕获 %d · 镜头 %s %.2f×" % ["已暂停" if _runner.paused else "运行", _access.tick * _access.config.fixed_dt, _access.capture_count, camera_text, _camera.zoom_level]
-	hud.perf_summary.text = "帧 P95 %.1f ms · 可见 %d" % [_runner.frame_percentile(0.95), _view.visible_count]
-	if _access.executor != null and not _runner.paused and _runner.snapshot_age_msec > 100.0:
-		hud.perf_summary.text += " · 等待模拟"
+	var frame_p95: float = _runner.frame_percentile(0.95)
+	hud.perf_summary.text = "帧 P95 %.1f ms · 可见 %d" % [frame_p95, _view.visible_count]
+	_refresh_performance(frame_p95)
 	if hud.stats.visible:
 		var statistics := PackedStringArray([
 			"运动后端：%s" % _access.motion_backend_status,
 			"模拟 %d · 参与互动 %d · 容量 %d" % [_access.store.count, _access.store.count - held_total, _access.store.capacity],
-			"帧间隔 P95 %.1f / P99 %.1f ms" % [_runner.frame_percentile(0.95), _runner.frame_percentile(0.99)],
+			"帧间隔 P95 %.1f / P99 %.1f ms" % [frame_p95, _runner.frame_percentile(0.99)],
 			"循环 CPU %.2f ms · 积压 %.3fs" % [_runner.cpu_frame_msec, _runner.accumulator_seconds],
 			"上步 AI %.2f / 运动 %.2f / 交互 %.2f ms" % [_access.phase_usec[3] / 1000.0, _access.phase_usec[4] / 1000.0, _access.phase_usec[5] / 1000.0],
-			"感知 / 决策逾期 %d / %d tick" % [_access.max_perception_delay_ticks, _access.max_decision_delay_ticks],
+			"历史最大逾期：感知 %d / 决策 %d tick" % [_access.max_perception_delay_ticks, _access.max_decision_delay_ticks],
 			"网格最密 %d · 候选访问 %d" % [_access.grid_max_occupancy, _access.grid_candidate_count],
 			"表现准备 %.2f ms · 状态标记 %d" % [_view.render_build_usec / 1000.0, _insight.active_mark_count()],
 		])
 		if _access.executor != null:
 			statistics.append("后台模拟 · 数据年龄 %.1fms · 缺失意图 %d" % [_runner.snapshot_age_msec, _access.publication.missing_intents])
+			statistics.append("统计端点年龄 %.0fms · 最近窗口可靠等待 %.1f%%" % [_performance.source_age_msec, _performance.backpressure_fraction * 100.0])
 		hud.stats.text = "\n".join(statistics)
 	hud.planner_label.text = "当前布局：" + _access.planner_description
 	_inspector_presenter.refresh(_access, _selected)
 	hud.tuning.refresh(_runner.paused)
 	if _access.probes.enabled:
 		_access.probes.record(Probes.Tag.HUD_REFRESH, Time.get_ticks_usec() - started_usec)
+
+func _refresh_performance(frame_p95: float) -> void:
+	var now_usec: int = Time.get_ticks_usec()
+	_performance.refresh(_access, _runner, now_usec)
+	var display_age: float = _runner.display_age_msec(now_usec) if _runner.has_display_sample() else -1.0
+	var display_text: String = "显示 --"
+	if _runner.paused:
+		display_text = "显示 已冻结"
+	elif display_age >= 0.0:
+		display_text = "显示年龄 %.0f ms" % display_age
+	hud.perf_progress.text = _performance.rate_text() + " · " + display_text
+	hud.perf_decision.text = ObserverPerformance.selected_decision_text(_access, _selected)
+	hud.perf_population.text = ObserverPerformance.intent_text(_access)
+	var missing_fraction: float = ObserverPerformance.missing_intent_fraction(_access)
+	hud.perf_status.text = _performance.status_text(display_age, frame_p95, missing_fraction)
+	var warning: bool = _performance.has_load_warning(display_age, frame_p95, missing_fraction)
+	hud.perf_status.add_theme_color_override("font_color", UiStyle.ACCENT if warning else UiStyle.INK_SOFT)
 
 func _on_display_committed() -> void:
 	# Input runs first. Reconcile the tiny grab preview after the atomic frame

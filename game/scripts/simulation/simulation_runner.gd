@@ -47,6 +47,9 @@ var _pending_reset: ScenarioConfig
 var _single_step: bool = false
 var _pending_pause: int = -1
 var _display_current_until_step: bool = false
+var _inline_previous_completed_usec: int = 0
+var _inline_completed_usec: int = 0
+var _inline_displayed_usec: float = 0.0
 
 func setup(simulation: SimulationWorld, view: WorldPresentation) -> void:
 	world = simulation
@@ -139,6 +142,9 @@ func _process(_delta: float) -> void:
 		elapsed = 0.0
 		_single_step = false
 		_display_current_until_step = false
+		_inline_previous_completed_usec = 0
+		_inline_completed_usec = 0
+		_inline_displayed_usec = 0.0
 	world.ai.begin_frame()
 	frame_phase_usec.fill(0)
 	frame_observe_usec = 0
@@ -159,6 +165,8 @@ func _process(_delta: float) -> void:
 			accumulator_seconds -= world.config.fixed_dt
 	var alpha: float = clampf(accumulator_seconds / world.config.fixed_dt, 0.0, 1.0)
 	presentation.present(world.tick, alpha, paused or _display_current_until_step)
+	if _inline_completed_usec > 0:
+		_inline_displayed_usec = _inline_completed_usec if paused or _display_current_until_step else lerpf(_inline_previous_completed_usec, _inline_completed_usec, alpha)
 	cpu_frame_msec = float(Time.get_ticks_usec() - frame_start) / 1000.0
 	if _ui_seconds >= 0.2:
 		_ui_seconds = 0.0
@@ -224,6 +232,8 @@ func _process_publications() -> void:
 	budget_overrun_usec = maxi(0, now - started - FRONTEND_BUDGET_USEC)
 
 func display_age_msec(now_usec: int) -> float:
+	if access == null:
+		return maxf(0.0, (now_usec - _inline_displayed_usec) / 1000.0) if _inline_displayed_usec > 0.0 else 0.0
 	if _front_job == null:
 		return 0.0
 	var source: SimulationPublication = _front_job.source
@@ -233,6 +243,9 @@ func display_age_msec(now_usec: int) -> float:
 		# simulation. A nominal fixed_dt is not a wall duration under overload.
 		displayed_usec = lerpf(source.previous_completed_usec, source.completed_usec, _front_job.alpha)
 	return (now_usec - displayed_usec) / 1000.0
+
+func has_display_sample() -> bool:
+	return _inline_displayed_usec > 0.0 if access == null else _front_job != null
 
 func _on_delivery(metrics: SimulationTelemetry) -> void:
 	if metrics.step_usec <= 0:
@@ -245,6 +258,9 @@ func _run_step() -> void:
 	var started: int = Time.get_ticks_usec()
 	world.step()
 	var elapsed_usec: int = Time.get_ticks_usec() - started
+	var completed_usec: int = started + elapsed_usec
+	_inline_previous_completed_usec = _inline_completed_usec if _inline_completed_usec > 0 else completed_usec
+	_inline_completed_usec = completed_usec
 	var observe_start: int = Time.get_ticks_usec() if world.probes.enabled else 0
 	presentation.observe_published(world.tick)
 	if world.probes.enabled:

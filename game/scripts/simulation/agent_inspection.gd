@@ -6,6 +6,7 @@ var handle: AgentHandle
 var task_name: StringName
 var observation_count: int = 0
 var last_perception_tick: int = -1
+var last_decision_tick: int = 0
 var next_perception_tick: int = 0
 var next_decision_tick: int = 0
 var perception_queued: bool = false
@@ -26,6 +27,7 @@ static func capture(world: SimulationWorld, selected: AgentHandle) -> AgentInspe
 	result.task_name = context.task_name
 	result.observation_count = context.observations.size()
 	result.last_perception_tick = context.last_perception_tick
+	result.last_decision_tick = context.last_decision_tick
 	result.next_perception_tick = context.next_perception_tick
 	result.next_decision_tick = context.next_decision_tick
 	result.perception_queued = context.perception_queued

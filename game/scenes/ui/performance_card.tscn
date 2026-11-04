@@ -48,6 +48,34 @@ focus_mode = 0
 toggle_mode = true
 text = "▴"
 
+[node name="Progress" type="Label" parent="Content"]
+layout_mode = 2
+mouse_filter = 1
+theme_override_font_sizes/font_size = 12
+tooltip_text = "实际倍率是约2秒窗口内完成的模拟秒/墙钟秒；后台模式含发布成本，每秒采样一次，不使用显示tick。切换速度、暂停或重置后重新采样。"
+text = "模拟 采样中 / 目标 1.00× · 显示 --"
+
+[node name="Decision" type="Label" parent="Content"]
+layout_mode = 2
+mouse_filter = 1
+theme_override_font_sizes/font_size = 12
+tooltip_text = "仅所选角色距最近一次决策的模拟时间，不是全群响应分位数或墙钟响应。暂停时不增长；等待首次/恢复感知单独标记。"
+text = "所选决策：选中角色查看"
+
+[node name="Population" type="Label" parent="Content"]
+layout_mode = 2
+mouse_filter = 1
+theme_override_font_sizes/font_size = 12
+tooltip_text = "最新可靠发布中，存活且未被提起的角色有多少缺少有效运动意图；不是完整AI响应验收。inline不新增全群扫描。"
+text = "全群意图：等待数据"
+
+[node name="Status" type="Label" parent="Content"]
+layout_mode = 2
+mouse_filter = 1
+theme_override_font_sizes/font_size = 12
+tooltip_text = "模拟低于目标的98%、显示年龄超过100ms、帧P95超过16.67ms、可靠交付等待超过1%或缺失意图超过0.1%时分别提示。阈值用于观察，不代表行为验收。"
+text = "正在采样"
+
 [node name="Stats" type="Label" parent="Content"]
 visible = false
 layout_mode = 2

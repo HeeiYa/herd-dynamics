@@ -238,10 +238,13 @@ func _capture_views(main: Node2D, world: SimulationWorld, view: WorldPresentatio
 	main.hud.toggle_ui()
 	# A thousand-body natural pasture, paused after its initial spread.
 	main.hud.layout.select(main.hud.layout.get_item_index(ScenarioConfig.Layout.NATURAL))
-	main.hud.sheep.value = 1000
-	main.hud.wolves.value = 12
-	main.hud.dogs.value = 6
-	main.observer.reset_scenario()
+	# Exercise the real pending-edit path. Range.value updates its LineEdit on
+	# a later notification; immediate programmatic writes are not typed input.
+	main.hud.sheep.get_line_edit().text = "1000"
+	main.hud.wolves.get_line_edit().text = "12"
+	main.hud.dogs.get_line_edit().text = "6"
+	main.hud.sheep.get_line_edit().grab_focus()
+	(main.hud.find_child("ResetScenario", true, false) as Button).pressed.emit()
 	# The reset applies on the next frame; do not read the old tick.
 	await process_frame
 	await process_frame
