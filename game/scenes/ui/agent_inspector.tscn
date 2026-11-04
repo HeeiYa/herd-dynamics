@@ -25,7 +25,7 @@ theme_override_constants/separation = 12
 [node name="Empty" type="Label" parent="."]
 modulate = Color(0.47843137, 0.41568628, 0.33333334, 1)
 layout_mode = 2
-text = "点击牧场中的角色查看它在做什么、为什么这样做。
+text = "点击牧场中的动物，看看它在做什么、正和谁协作。
 
 快捷键：F 跟随 · Home 总览 · Esc 取消"
 autowrap_mode = 3
@@ -45,6 +45,7 @@ theme_override_font_sizes/bold_font_size = 14
 bbcode_enabled = true
 fit_content = true
 scroll_active = false
+autowrap_mode = 3
 
 [node name="HungerRow" type="HBoxContainer" parent="."]
 visible = false
