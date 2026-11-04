@@ -34,6 +34,10 @@ var _pose_sample_count: int = 0
 var _behavior_probe: ProductionBehaviorProtocol
 # Only a completed, primitive report crosses the mutex; the UI never sees probe/World.
 var _behavior_report: Dictionary = {}
+var _endurance_probe: EnduranceProbe
+var _endurance_request := PackedInt64Array()
+var _endurance_snapshot: Dictionary = {}
+var _endurance_report: Dictionary = {}
 
 # Diagnostic accumulators are updated/read under the mailbox mutex. Sampling
 # never borrows the live World. Totals span resets; epoch/tick label the latest
@@ -140,6 +144,28 @@ func take_behavior_report() -> Dictionary:
 	_mutex.unlock()
 	return result
 
+## The frontend requests a future monotonic window, never reads the live probe.
+func arm_endurance_window(first_usec: int, last_usec: int) -> bool:
+	_mutex.lock()
+	var accepted: bool = not _endurance_snapshot.is_empty() and _endurance_request.is_empty() and int(_endurance_snapshot.get("start_usec", 0)) == 0
+	if accepted:
+		_endurance_request = PackedInt64Array([first_usec, last_usec])
+	_mutex.unlock()
+	return accepted
+
+func endurance_status() -> Dictionary:
+	_mutex.lock()
+	var result: Dictionary = _endurance_snapshot.duplicate(true)
+	_mutex.unlock()
+	return result
+
+func take_endurance_report() -> Dictionary:
+	_mutex.lock()
+	var result: Dictionary = _endurance_report
+	_endurance_report = {}
+	_mutex.unlock()
+	return result
+
 func close() -> void:
 	if not _thread.is_started():
 		return
@@ -155,6 +181,7 @@ func _run() -> void:
 	world.observer_event.connect(_observer_notice)
 	world.setup(_config, _initial)
 	_setup_behavior_probe(world)
+	_setup_endurance_probe(world)
 	_publish(world, 0)
 	var last_usec: int = Time.get_ticks_usec()
 	var consecutive_steps: int = 0
@@ -164,6 +191,8 @@ func _run() -> void:
 		var room: bool = _deliveries.size() < PUBLICATION_LIMIT
 		var commands: Array[SimulationCommand] = _commands
 		_commands = []
+		var endurance_window: PackedInt64Array = _endurance_request
+		_endurance_request = PackedInt64Array()
 		_mutex.unlock()
 		if stopping:
 			for pending: SimulationCommand in commands + _awaiting_step + _step_requests:
@@ -171,6 +200,11 @@ func _run() -> void:
 			if not _notices.is_empty():
 				_publish(world, 0, true)
 			break
+		if not endurance_window.is_empty() and _endurance_probe != null:
+			_endurance_probe.arm_window(endurance_window[0], endurance_window[1])
+			_mutex.lock()
+			_endurance_snapshot = _endurance_probe.status()
+			_mutex.unlock()
 		var now: int = Time.get_ticks_usec()
 		if not _paused:
 			_accumulator_seconds += float(now - last_usec) * _speed / 1000000.0
@@ -212,6 +246,26 @@ func _run() -> void:
 	world.motion.close()
 	world.ai.reset()
 	world.free()
+
+func _setup_endurance_probe(world: SimulationWorld) -> void:
+	var arguments: PackedStringArray = OS.get_cmdline_user_args()
+	if not arguments.has("--benchmark=endurance"):
+		return
+	var mode: String = "natural"
+	var interval: int = 1800
+	var observe_service: bool = true
+	for argument: String in arguments:
+		if argument.begins_with("--endurance-mode="):
+			mode = argument.trim_prefix("--endurance-mode=")
+		elif argument.begins_with("--turnover-ticks="):
+			interval = int(argument.trim_prefix("--turnover-ticks="))
+		elif argument == "--endurance-observe=0":
+			observe_service = false
+	_endurance_probe = EnduranceProbe.new()
+	_endurance_probe.turnover_ticks = interval
+	_endurance_probe.observe_service = observe_service
+	_endurance_probe.require_gpu = true
+	_endurance_probe.setup(world, mode, PackedInt32Array([_initial.sheep_count, _initial.wolf_count, _initial.dog_count]))
 
 func _setup_behavior_probe(world: SimulationWorld) -> void:
 	var arguments: PackedStringArray = OS.get_cmdline_user_args()
@@ -503,3 +557,16 @@ func _publish(world: SimulationWorld, step_usec: int, closing: bool = false) -> 
 	_latest = publication
 	_mutex.unlock()
 	replaced = null
+	if _endurance_probe != null and not closing:
+		var revision: int = _endurance_probe.status_revision
+		_endurance_probe.observe_publication(publication)
+		if revision != _endurance_probe.status_revision:
+			var status: Dictionary = _endurance_probe.status()
+			_mutex.lock()
+			_endurance_snapshot = status
+			if _endurance_probe.finished:
+				_endurance_report = _endurance_probe.final_report
+			_mutex.unlock()
+		if _endurance_probe.finished:
+			_paused = true
+			_endurance_probe = null
