@@ -54,6 +54,7 @@ func _run() -> void:
 	_check(quality[SimTypes.Species.SHEEP]["active"] == 3, "Quality denominator excludes held lives and includes unserved lives")
 	_check(quality[SimTypes.Species.SHEEP]["never_perceived"] >= 1, "Unserved lives remain explicit in the quality result")
 	_check(quality[SimTypes.Species.SHEEP]["missing_or_expired_intent"] >= 1, "Missing intents are counted instead of omitted")
+	_check_receipt_drain_window(world, runner)
 	benchmark.free()
 	runner.queue_free()
 	view.queue_free()
@@ -61,3 +62,30 @@ func _run() -> void:
 	await process_frame
 	print("MEASUREMENT_TESTS checks=%d failures=%d" % [_checks, _failures])
 	quit(0 if _failures == 0 else 1)
+
+func _check_receipt_drain_window(world: SimulationWorld, runner: SimulationRunner) -> void:
+	var benchmark := ExecutionBenchmark.new()
+	benchmark._access = SimulationAccess.local(world)
+	benchmark._started_usec = Time.get_ticks_usec() - 1000000
+	benchmark._sampling = true
+	benchmark._collecting_receipts = true
+	benchmark._controls[1] = true
+	runner.committed_frames = 10
+	var end_tick: int = world.tick
+	var sample_end: Dictionary = benchmark._finish_sampling(runner)
+	world.tick += 3
+	runner.committed_frames += 2
+	var late_step := SimulationTelemetry.new()
+	late_step.tick = world.tick
+	late_step.step_usec = 1
+	benchmark._on_publication(late_step)
+	benchmark._receive_pulse(Time.get_ticks_usec())
+	var receipt := SimulationCommand.Receipt.new()
+	receipt.request_id = 1
+	receipt.accepted = true
+	receipt.submitted_usec = Time.get_ticks_usec() - 1000
+	benchmark._on_receipt(receipt)
+	_check(sample_end["tick"] == end_tick and sample_end["display_commits"] == 10, "Receipt drain cannot change the frozen throughput or display window")
+	_check(benchmark._steps.is_empty() and benchmark._pulses.is_empty(), "Drain-only steps and dispatch pulses stay outside steady-window samples")
+	_check(benchmark._received_controls == 1 and benchmark._receipts.size() == 1, "Late receipts are still collected independently of the closed frame window")
+	benchmark.free()

@@ -316,9 +316,9 @@ func _on_reliable_behavior(notice: SimulationNotice) -> void:
 func _clear_old_epochs() -> void:
 	# New-epoch events can arrive before its first completed display frame.
 	for index: int in range(_marks.size() - 1, -1, -1):
-		if _marks[index].handle.world_epoch != _view._epoch:
+		if _marks[index].handle.world_epoch < _view._epoch:
 			_marks.remove_at(index)
 	for slot: int in _last_mark.keys():
-		if _last_mark[slot].handle.world_epoch != _view._epoch:
+		if _last_mark[slot].handle.world_epoch < _view._epoch:
 			_last_mark.erase(slot)
 	hovered = null

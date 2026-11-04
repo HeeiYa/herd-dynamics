@@ -6,6 +6,7 @@ var _options: Dictionary[String, String] = {}
 var _main: Node2D
 var _access: SimulationAccess
 var _sampling: bool = false
+var _collecting_receipts: bool = false
 var _started_usec: int = 0
 var _frames: Array[PackedStringArray] = []
 var _steps: Array[PackedStringArray] = []
@@ -107,6 +108,7 @@ func _run() -> void:
 	var start_tick: int = _access.tick
 	var start_counts: PackedInt32Array = _access.counts()
 	_sampling = true
+	_collecting_receipts = true
 	var previous_usec: int = _started_usec
 	var next_fault: int = _started_usec + 1000000
 	var fault_msec: int = clampi(int(_options.get("stall-ms", "0")), 0, 500)
@@ -164,13 +166,14 @@ func _run() -> void:
 		_previous_probe_sums = _access.probes.sums.duplicate()
 		frame_row.append_array(PackedStringArray([str(runner.event_usec), str(runner.prepare_usec), str(runner.commit_usec), str(runner.budget_overrun_usec), str(runner.display_sequence), str(_access.delivered_sequence), str(_access.skipped_states)]))
 		_frames.append(frame_row)
-	var elapsed_seconds: float = float(Time.get_ticks_usec() - _started_usec) / 1000000.0
-	# Drain submitted control receipts while sampling remains on; do not add drain
-	# frames to the steady display/frame window. Missing receipts fail the gate.
+	var sample_end: Dictionary = _finish_sampling(_main._runner)
+	var elapsed_seconds: float = sample_end["elapsed_seconds"]
+	# Receipt delivery may finish after the steady window. Freeze all throughput,
+	# step and display counters first so the drain cannot inflate the numerator.
 	var drain_deadline: int = Time.get_ticks_usec() + 2000000
 	while _received_controls < _submitted_controls and Time.get_ticks_usec() < drain_deadline:
 		await get_tree().process_frame
-	_sampling = false
+	_collecting_receipts = false
 	_pulse_mutex.lock()
 	_stop_pulses = true
 	_pulse_mutex.unlock()
@@ -183,10 +186,10 @@ func _run() -> void:
 		"frontend_budget_us": SimulationRunner.FRONTEND_BUDGET_USEC,
 		"budget_overrun_frames": _budget_overruns, "maximum_overrun_us": _maximum_overrun_usec,
 		"maximum_commit_us": _maximum_commit_usec,
-		"display_commits": _main._runner.committed_frames - start_committed,
-		"skipped_states": _access.skipped_states - start_skipped,
-		"skipped_display_states": _main._runner.skipped_display_states - start_display_skipped,
-		"latency_gate_100ms": control_hz > 0.0 and _submitted_controls > 0 and _rejected_controls == 0 and _main._runner.committed_frames > start_committed and _received_controls == _submitted_controls and _percentile(_receipt_latencies, 1.0) <= 100.0 and _percentile(_display_ages, 1.0) <= 100.0,
+		"display_commits": sample_end["display_commits"] - start_committed,
+		"skipped_states": sample_end["skipped_states"] - start_skipped,
+		"skipped_display_states": sample_end["skipped_display_states"] - start_display_skipped,
+		"latency_gate_100ms": control_hz > 0.0 and _submitted_controls > 0 and _rejected_controls == 0 and sample_end["display_commits"] > start_committed and _received_controls == _submitted_controls and _percentile(_receipt_latencies, 1.0) <= 100.0 and _percentile(_display_ages, 1.0) <= 100.0,
 		"pasture": PastureBenchmarkOptions.describe(_access.config),
 		"mode": "worker" if worker else "inline", "engine": Engine.get_version_info(),
 		"debug_build": OS.is_debug_build(), "processor": OS.get_processor_name(),
@@ -195,13 +198,14 @@ func _run() -> void:
 		"vsync": DisplayServer.window_get_vsync_mode(), "instrument": config.instrument_enabled,
 		"seed": scenario.random_seed, "layout": scenario.layout,
 		"initial": [scenario.sheep_count, scenario.wolf_count, scenario.dog_count],
-		"start_counts": Array(start_counts), "final_counts": Array(_access.counts()), "captures": _access.capture_count,
+		"start_counts": Array(start_counts), "final_counts": sample_end["counts"], "captures": sample_end["captures"],
 		"motion_backend": _access.motion_backend_status, "gpu_bulk": config.gpu_bulk_upload,
 		"presentation_backend": "gpu_instances" if config.gpu_presentation else "cpu_canvas",
 		"ai_budget_usec": config.worker_ai_budget_usec if worker else config.ai_budget_usec,
 		"ai_budget_clock": "fixed step" if worker else "render frame",
 		"warmup_seconds": float(_options.get("warmup-seconds", "10")), "wall_seconds": elapsed_seconds,
-		"simulation_seconds_per_wall_second": float(_access.tick - start_tick) * config.fixed_dt / elapsed_seconds,
+		"sample_start_tick": start_tick, "sample_end_tick": sample_end["tick"],
+		"simulation_seconds_per_wall_second": float(sample_end["tick"] - start_tick) * config.fixed_dt / elapsed_seconds,
 		"frame_p50_ms": _percentile(_frame_times, 0.5), "frame_p95_ms": _percentile(_frame_times, 0.95),
 		"frame_p99_ms": _percentile(_frame_times, 0.99), "frame_max_ms": _percentile(_frame_times, 1.0),
 		"dispatch_p95_ms": _percentile(_dispatch_times, 0.95), "dispatch_p99_ms": _percentile(_dispatch_times, 0.99),
@@ -212,7 +216,7 @@ func _run() -> void:
 		"ui_actions": action_mode, "regenerate_sheep": regenerate,
 		"reset_first_publication_ms": _first_new_epoch_ms, "reset_population_ready_ms": _population_ready_ms,
 		"regeneration_warning": "Whole-window tick/wall ratio is not valid across reset; derive post-generation throughput from epoch-labelled rows." if regenerate > 0 else "none",
-		"frontend_profile": _access.probes.summary(),
+		"frontend_profile": sample_end["frontend_profile"],
 		"limitations": "10ms independent deferred pulses measure main-loop dispatch, not hardware input latency. Per-step quality scans and in-memory CSV collection are included in workload. CSV files are written after sampling; optional observer logs are written during sampling. Worker snapshots add their own cost. Wall-budget AI is not deterministic."
 	}
 	_write_csv(output.path_join("frames.csv"), "elapsed_us,tick,frame_ms,frontend_cpu_ms,snapshot_age_ms,backlog_seconds,visible,epoch,population,render_build_us,sort_us,published_steps,gpu_render_ms,visual_publish_us,body_prepare_us,shadows_us,body_submit_us,observer_update_us,hud_refresh_us,event_us,prepare_us,commit_us,budget_overrun_us,display_sequence,delivered_sequence,skipped_states", _frames)
@@ -228,6 +232,16 @@ func _run() -> void:
 	_main.queue_free()
 	await get_tree().process_frame
 	get_tree().quit(0)
+
+func _finish_sampling(runner: SimulationRunner) -> Dictionary:
+	_sampling = false
+	return {
+		"elapsed_seconds": float(Time.get_ticks_usec() - _started_usec) / 1000000.0,
+		"tick": _access.tick, "counts": Array(_access.counts()), "captures": _access.capture_count,
+		"display_commits": runner.committed_frames, "skipped_states": _access.skipped_states,
+		"skipped_display_states": runner.skipped_display_states,
+		"frontend_profile": _access.probes.summary(),
+	}
 
 func _produce_pulses() -> void:
 	while true:
@@ -337,7 +351,7 @@ func _on_receipt(receipt: SimulationCommand.Receipt) -> void:
 		_controls.erase(receipt.request_id)
 		_received_controls += 1
 		_rejected_controls += int(not receipt.accepted)
-	if _sampling:
+	if _collecting_receipts:
 		_receipt_latencies.append(float(Time.get_ticks_usec() - receipt.submitted_usec) / 1000.0)
 		_receipts.append(PackedStringArray([str(receipt.request_id), str(receipt.submitted_usec - _started_usec), str(receipt.completed_usec - _started_usec), str(Time.get_ticks_usec() - _started_usec), str(receipt.accepted), receipt.reason]))
 

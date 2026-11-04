@@ -97,6 +97,8 @@ func _run() -> void:
 	expired.config = config
 	expired.scenario = scenario
 	_check(view.reliable_captures(expired, expired.tick).is_empty(), "Late reliable facts do not resurrect an already expired visual")
+	_check_cancelled_repair(view, snapshot)
+	_check_future_epoch_marks(view)
 	world.motion.close()
 	world.ai.reset()
 	world.free()
@@ -104,3 +106,51 @@ func _run() -> void:
 	await process_frame
 	print("PRESENTATION_BUDGET_TESTS checks=%d failures=%d slices=%d" % [_checks, _failures, slices])
 	quit(0 if _failures == 0 else 1)
+
+func _check_cancelled_repair(view: WorldPresentation, snapshot: SimulationPublication) -> void:
+	var interrupted := PresentationJob.new()
+	interrupted.source = snapshot
+	var body := WorldPresentation.DrawEntry.new()
+	body.handle = AgentHandle.new(0, 1, snapshot.epoch)
+	body.foot = Vector2(160, 200)
+	body.listed = true
+	var capture := WorldPresentation.DrawEntry.new()
+	capture.handle = AgentHandle.new(1, 1, snapshot.epoch)
+	capture.foot = Vector2(160, 160)
+	capture.listed = true
+	interrupted.drawings.assign([body, capture])
+	interrupted._capture_drawings.append(capture)
+	interrupted.phase = PresentationJob.Phase.REPAIR
+	interrupted._repair()
+	_check(interrupted._repair_entry == capture and not interrupted.drawings.has(capture), "Fixture yields while insertion repair holds a capture outside the list")
+	var reset := SimulationPublication.new()
+	reset.epoch = snapshot.epoch + 1
+	reset.tick = 1
+	reset.store = AgentStore.new()
+	reset.store.epoch = reset.epoch
+	reset.config = snapshot.config
+	reset.scenario = snapshot.scenario
+	reset.resources = snapshot.resources
+	var event := CaptureEvent.new()
+	event.target = AgentHandle.new(0, 1, reset.epoch)
+	event.position = Vector2(160, 160)
+	event.tick = reset.tick
+	view.queue_reliable_capture(event, null)
+	interrupted.begin(view, reset, 1.0, true)
+	_finish(interrupted)
+	_check(interrupted.capture_count == 1 and interrupted.drawings.size() == 1, "Reset during repair cannot leave a reused capture marked as already listed")
+	if not interrupted.drawings.is_empty():
+		_check(interrupted.drawings[0].handle.same_life(event.target), "Only the new epoch's capture enters the replacement frame")
+
+func _check_future_epoch_marks(view: WorldPresentation) -> void:
+	var overlay := InsightOverlay.new()
+	overlay._view = view
+	var old := AgentHandle.new(0, 1, view._epoch - 1)
+	var current := AgentHandle.new(1, 1, view._epoch)
+	var future := AgentHandle.new(2, 1, view._epoch + 1)
+	for handle: AgentHandle in [old, current, future]:
+		overlay._add_mark(handle, InsightOverlay.MarkKind.CAPTURE, Vector2.ZERO, 0)
+	overlay._clear_old_epochs()
+	_check(overlay.active_mark_count() == 2, "Clearing an old display epoch retains already delivered future-epoch marks")
+	_check(overlay._last_mark.has(future.slot) and not overlay._last_mark.has(old.slot), "Mark throttling retains future identity and forgets only retired epochs")
+	overlay.free()

@@ -41,6 +41,11 @@ func begin(view: WorldPresentation, snapshot: SimulationPublication, interpolati
 			entry.listed = false
 		drawings.clear()
 		states.clear()
+		# A suspended insertion can hold an entry outside drawings. Discard all
+		# old-epoch owners so a capture cannot retain a stale listed flag.
+		_capture_drawings.clear()
+		_scratch.clear()
+		_repair_entry = null
 	source = snapshot
 	alpha = clampf(interpolation, 0.0, 1.0)
 	if view._epoch == snapshot.epoch:
