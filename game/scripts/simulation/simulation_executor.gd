@@ -297,6 +297,10 @@ func _setup_behavior_probe(world: SimulationWorld) -> void:
 	match behavior_case:
 		"two-flocks":
 			_behavior_probe = ProductionBehaviorProbe.new()
+		"dog-protection":
+			var dog_protection := ProductionDogProtectionProbe.new()
+			dog_protection.geometry_variant = ProductionDogProtectionGeometry.from_arguments(arguments)
+			_behavior_probe = dog_protection
 		"hunt-cooperation":
 			var hunt := ProductionHuntProbe.new()
 			hunt.geometry_variant = ProductionHuntGeometry.from_arguments(arguments)

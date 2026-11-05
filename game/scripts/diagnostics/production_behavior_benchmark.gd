@@ -25,7 +25,12 @@ func _run() -> void:
 		push_error(geometry_error)
 		get_tree().quit(1)
 		return
-	if behavior_case not in ["two-flocks", "hunt-cooperation", "forage-migration", "forage-empty"]:
+	var dog_error: String = ProductionDogProtectionGeometry.argument_error(OS.get_cmdline_user_args(), behavior_case, sheep_count, seed_value)
+	if not dog_error.is_empty():
+		push_error(dog_error)
+		get_tree().quit(1)
+		return
+	if behavior_case not in ["two-flocks", "dog-protection", "hunt-cooperation", "forage-migration", "forage-empty"]:
 		push_error("Unknown production behavior case: " + behavior_case)
 		get_tree().quit(1)
 		return
@@ -84,7 +89,9 @@ func _run() -> void:
 	if not report.get("fixture_valid", true):
 		var failure_output: String = options.get("output", "user://production-behavior")
 		DirAccess.make_dir_recursive_absolute(failure_output)
-		_write_json(failure_output.path_join("summary.json"), report)
+		var failure_saved: bool = _write_json(failure_output.path_join("summary.json"), report)
+		if not failure_saved:
+			push_error("Fixture rejection report could not be saved; diagnostic evidence is incomplete.")
 		push_error("Production behavior fixture rejected: " + str(report["fixture_error"]))
 		_main.queue_free()
 		await get_tree().process_frame
@@ -105,7 +112,16 @@ func _run() -> void:
 		saved = _write_records(output.path_join("dog-threats.csv"), report["dog_threats"]) and saved
 	else:
 		saved = _write_records(output.path_join("terminal.csv"), report["terminal"]) and saved
-		if behavior_case == "hunt-cooperation":
+		if behavior_case == "dog-protection":
+			saved = _write_records(output.path_join("initial-roster.csv"), report["initial_roster"]) and saved
+			saved = _write_records(output.path_join("preflight.csv"), report["preflight"]) and saved
+			saved = _write_records(output.path_join("dog-contexts.csv"), report["dog_contexts"]) and saved
+			saved = _write_records(output.path_join("dog-threats.csv"), report["dog_threats"]) and saved
+			saved = _write_records(output.path_join("wolf-steps.csv"), report["wolf_steps"]) and saved
+			saved = _write_records(output.path_join("anchor-changes.csv"), report["anchor_changes"]) and saved
+			saved = _write_records(output.path_join("cohort-samples.csv"), report["cohort_samples"]) and saved
+			saved = _write_records(output.path_join("captures.csv"), report["captures"]) and saved
+		elif behavior_case == "hunt-cooperation":
 			saved = _write_records(output.path_join("roles.csv"), report["roles"]) and saved
 			saved = _write_records(output.path_join("hunt-contexts.csv"), report["samples"]) and saved
 			saved = _write_records(output.path_join("attack-steps.csv"), report["attack_steps"]) and saved
