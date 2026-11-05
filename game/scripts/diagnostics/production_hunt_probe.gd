@@ -7,6 +7,9 @@ const END_TICK: int = 1200
 const SAMPLE_PERIOD: int = 3
 const HUNTER_OFFSETS: Array[Vector2] = ProductionHuntGeometry.BASELINE_OFFSETS
 var geometry_variant: ProductionHuntGeometry.Variant = ProductionHuntGeometry.Variant.BASELINE
+var layout: ProductionHuntCohort.Layout = ProductionHuntCohort.Layout.ORIGINAL
+var _fixed_cohort: ProductionHuntCohort
+var _cohort_setup_usec: int = 0
 var _fixture_error: String = ""
 var _requested_hunter_positions: Array[Vector2] = []
 var _registered_hunters: Array[Dictionary] = []
@@ -41,20 +44,32 @@ func setup(world: SimulationWorld, sheep_count: int, seed_value: int) -> void:
 	if geometry_variant == ProductionHuntGeometry.Variant.INVALID:
 		_fail_geometry("Unknown hunt geometry.")
 		return
-	if geometry_variant != ProductionHuntGeometry.Variant.BASELINE and sheep_count != 80:
+	if layout == ProductionHuntCohort.Layout.FIXED_COHORT80:
+		if sheep_count not in [80, 1000] or seed_value != 42 or geometry_variant not in [ProductionHuntGeometry.Variant.NORTH, ProductionHuntGeometry.Variant.OBLIQUE]:
+			_fail_geometry("Fixed hunt cohort requires seed42, 80/1000 sheep and north/oblique geometry.")
+			return
+	elif layout != ProductionHuntCohort.Layout.ORIGINAL:
+		_fail_geometry("Unknown hunt layout.")
+		return
+	elif geometry_variant != ProductionHuntGeometry.Variant.BASELINE and sheep_count != 80:
 		_fail_geometry("Changed hunt geometries require exactly 80 sheep.")
 		return
 	world.diagnostic_step_started = observe_step_start
 	world.captured.connect(_on_capture)
-	var sheep_positions: Array[Vector2] = [Vector2(600, 700)]
-	var random := RandomNumberGenerator.new()
-	random.seed = seed_value
-	var count: int = sheep_count - 1
-	var columns: int = ceili(sqrt(float(count)))
-	var rows: int = ceili(float(count) / columns)
-	for index: int in count:
-		var offset := Vector2(index % columns - (columns - 1) * 0.5, index / columns - (rows - 1) * 0.5) * 32.0
-		sheep_positions.append(Vector2(1800, 700) + offset + Vector2(random.randf_range(-2, 2), random.randf_range(-2, 2)))
+	var sheep_positions: Array[Vector2]
+	if layout == ProductionHuntCohort.Layout.FIXED_COHORT80:
+		var started: int = Time.get_ticks_usec()
+		_fixed_cohort = ProductionHuntCohort.new()
+		_fixed_cohort.prepare(sheep_count, seed_value)
+		var error: String = _fixed_cohort.placement_error(world)
+		_cohort_setup_usec = Time.get_ticks_usec() - started
+		observer_usec += _cohort_setup_usec
+		if not error.is_empty():
+			_fail_geometry(error)
+			return
+		sheep_positions = _fixed_cohort.requested_positions
+	else:
+		sheep_positions = ProductionHuntCohort.original_positions(sheep_count, seed_value)
 	for position: Vector2 in sheep_positions:
 		if not ProductionHuntGeometry.body_inside_world(position, world.config.agent_radius, world.config.world_size):
 			_fail_geometry("An initial sheep body would cross the world boundary.")
@@ -74,6 +89,12 @@ func before_step(world: SimulationWorld) -> void:
 		_requested_hunter_positions.append(position + offset)
 	var error: String = ProductionHuntGeometry.placement_error(position, _requested_hunter_positions,
 		world.config.agent_radius, world.config.world_size, world.config.perception_radius, world.ai.settings.cooperation_radius)
+	if _fixed_cohort != null:
+		# Always retain all-body evidence for every candidate, even when the
+		# separate opportunity/boundary validation already rejected the geometry.
+		var body_error: String = _fixed_cohort.hunter_placement_error(world, _requested_hunter_positions)
+		if error.is_empty():
+			error = body_error
 	if not error.is_empty():
 		_fail_geometry(error)
 		observer_usec += Time.get_ticks_usec() - started
@@ -90,6 +111,12 @@ func observe_step_start(world: SimulationWorld) -> void:
 		return
 	var started: int = Time.get_ticks_usec()
 	if _bait == null and world.store.count > 0:
+		if _fixed_cohort != null:
+			var error: String = _fixed_cohort.register_lives(world)
+			if not error.is_empty():
+				_fail_geometry(error)
+				observer_usec += Time.get_ticks_usec() - started
+				return
 		_bait = world.store.handle_at(0)
 	if world.tick == HUNTER_TICK:
 		for dense: int in world.store.count:
@@ -331,12 +358,15 @@ func _sample_quality(tick: int) -> void:
 		missing += int(_world.intents.get_intent(_world.store.handle_at(dense), tick) == null)
 	_quality.append({"tick": tick + 1, "elapsed_usec": Time.get_ticks_usec() - _started_usec,
 		"active": _world.store.count, "missing_intents": missing})
+	if _fixed_cohort != null:
+		_fixed_cohort.sample_background(_world, _started_usec)
 
 func finish_report() -> Dictionary:
 	assert(finished)
 	if not _fixture_error.is_empty():
-		var failure: Dictionary = report_header(_world, "production-hunt-cooperation-v1", _seed, _sheep_count, _started_usec)
+		var failure: Dictionary = report_header(_world, _protocol_version(), _seed, _sheep_count, _started_usec)
 		failure.merge(_geometry_report())
+		failure.merge(_layout_report())
 		return failure
 	var records: Array[Dictionary] = []
 	var roles: Array[Dictionary] = []
@@ -360,8 +390,9 @@ func finish_report() -> Dictionary:
 		outcome["right_real_motion_lives"] += int(record.role_motion_tick[2] >= 0)
 		outcome["feeding_after_capture"] += int(record.feed_tick >= 0)
 		outcome["physically_stopped_feeding"] += int(record.feed_stopped_tick >= 0)
-	var report: Dictionary = report_header(_world, "production-hunt-cooperation-v1", _seed, _sheep_count, _started_usec)
+	var report: Dictionary = report_header(_world, _protocol_version(), _seed, _sheep_count, _started_usec)
 	report.merge(_geometry_report())
+	report.merge(_layout_report())
 	report.merge({"case": "hunt_cooperation", "outcomes": [outcome], "records": records, "roles": roles,
 		"terminal": terminal, "samples": _samples.duplicate(true), "attack_steps": _attack_steps.duplicate(true), "quality": _quality.duplicate(true),
 		"attack_trace_version": "same-phase-attack-steps-v1",
@@ -374,6 +405,20 @@ func finish_report() -> Dictionary:
 		"scope": "Isolated registered sheep and distant background flock; three registered wolves appear at tick240 around its actual position as an external experiment. No target, lease, hunger, speed, task or output is forced. CaptureEvent, nutrition state, later owned FEED/actual stopping and end states are separate evidence. A finite-horizon no-capture outcome is retained, not converted to success."})
 	return report
 
+func _protocol_version() -> String:
+	if layout == ProductionHuntCohort.Layout.FIXED_COHORT80:
+		return ProductionHuntCohort.VERSION
+	return "production-hunt-cooperation-v1"
+
+func _layout_report() -> Dictionary:
+	if _fixed_cohort == null:
+		return {}
+	var started: int = Time.get_ticks_usec()
+	var result: Dictionary = _fixed_cohort.report(_world)
+	result["cohort_setup_usec"] = _cohort_setup_usec
+	result["cohort_report_usec"] = Time.get_ticks_usec() - started
+	return result
+
 func _fail_geometry(reason: String) -> void:
 	_fixture_error = reason
 	finished = true
@@ -382,9 +427,12 @@ func _geometry_report() -> Dictionary:
 	var positions: Array[Array] = []
 	for position: Vector2 in _requested_hunter_positions:
 		positions.append([position.x, position.y])
+	var scope: String = "Only the three hunter offsets change. Prey/background layout, clock, budget and policies are unchanged. Actual bodies and opportunities are checked before registration; invalid geometry is rejected, never clamped or retried."
+	if layout == ProductionHuntCohort.Layout.FIXED_COHORT80:
+		scope = "Fixed80 foreground plus0/920 ordinary background lives. Only north/oblique offsets select the declared three-hunter stimulus. At tick240 every candidate is checked against every actual active body before the whole batch is queued. Invalid geometry is retained without retry, clamping or partial registration."
 	return {"geometry_version": ProductionHuntGeometry.VERSION,
 		"geometry_variant": ProductionHuntGeometry.variant_name(geometry_variant),
 		"fixture_valid": _fixture_error.is_empty(), "fixture_error": _fixture_error,
 		"stimulus_reference_position": [_stimulus_reference.x, _stimulus_reference.y],
 		"requested_hunter_positions": positions, "registered_hunters": _registered_hunters.duplicate(true),
-		"geometry_scope": "Only the three hunter offsets change. Prey/background layout, clock, budget and policies are unchanged. Actual bodies and opportunities are checked before registration; invalid geometry is rejected, never clamped or retried."}
+		"geometry_scope": scope}

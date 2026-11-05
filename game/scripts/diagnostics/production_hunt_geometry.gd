@@ -38,6 +38,9 @@ static func argument_error(arguments: PackedStringArray, behavior_case: String, 
 	for argument: String in arguments:
 		if not argument.begins_with("--hunt-"):
 			continue
+		if argument.begins_with("--hunt-layout="):
+			# The cohort parser validates its exact matrix and duplicate options.
+			continue
 		if not argument.begins_with("--hunt-geometry="):
 			return "Unknown hunt option: " + argument
 		selections += 1
@@ -50,7 +53,7 @@ static func argument_error(arguments: PackedStringArray, behavior_case: String, 
 		return "--hunt-geometry only belongs to hunt-cooperation."
 	if variant == Variant.INVALID:
 		return "Unknown hunt geometry; expected baseline, north or oblique."
-	if variant != Variant.BASELINE and sheep_count != 80:
+	if variant != Variant.BASELINE and sheep_count != 80 and not arguments.has("--hunt-layout=fixed-cohort80"):
 		return "Changed hunt geometries require exactly 80 sheep."
 	return ""
 

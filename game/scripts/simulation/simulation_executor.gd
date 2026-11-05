@@ -304,6 +304,7 @@ func _setup_behavior_probe(world: SimulationWorld) -> void:
 		"hunt-cooperation":
 			var hunt := ProductionHuntProbe.new()
 			hunt.geometry_variant = ProductionHuntGeometry.from_arguments(arguments)
+			hunt.layout = ProductionHuntCohort.from_arguments(arguments)
 			_behavior_probe = hunt
 		"forage-migration", "forage-empty":
 			var forage := ProductionForageProbe.new()

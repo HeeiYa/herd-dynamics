@@ -25,6 +25,11 @@ func _run() -> void:
 		push_error(geometry_error)
 		get_tree().quit(1)
 		return
+	var hunt_layout_error: String = ProductionHuntCohort.argument_error(OS.get_cmdline_user_args(), behavior_case, sheep_count, seed_value)
+	if not hunt_layout_error.is_empty():
+		push_error(hunt_layout_error)
+		get_tree().quit(1)
+		return
 	var dog_error: String = ProductionDogProtectionGeometry.argument_error(OS.get_cmdline_user_args(), behavior_case, sheep_count, seed_value)
 	if not dog_error.is_empty():
 		push_error(dog_error)
@@ -126,6 +131,12 @@ func _run() -> void:
 			saved = _write_records(output.path_join("hunt-contexts.csv"), report["samples"]) and saved
 			saved = _write_records(output.path_join("attack-steps.csv"), report["attack_steps"]) and saved
 			saved = _write_records(output.path_join("captures.csv"), report["captures"]) and saved
+			if report.get("layout", "") == "fixed-cohort80":
+				saved = _write_records(output.path_join("initial-cohort.csv"), report["initial_cohort"]) and saved
+				saved = _write_records(output.path_join("initial-background.csv"), report["initial_background"]) and saved
+				saved = _write_records(output.path_join("background-quality.csv"), report["background_quality"]) and saved
+				saved = _write_records(output.path_join("sheep-terminal.csv"), report["sheep_terminal"]) and saved
+				saved = _write_records(output.path_join("hunter-body-preflight.csv"), report["hunter_body_preflight"]) and saved
 		else:
 			saved = _write_records(output.path_join("first-intake.csv"), report["first_intake"]) and saved
 			saved = _write_records(output.path_join("forage-diagnostics.csv"), report["forage_diagnostics"]) and saved
