@@ -74,12 +74,15 @@ static func argument_error(arguments: PackedStringArray, behavior_case: String, 
 	for argument: String in arguments:
 		if not argument.begins_with("--dog-"):
 			continue
+		if argument.begins_with("--dog-withdrawal="):
+			# The withdrawal helper owns mode and case validation.
+			continue
 		if not argument.begins_with("--dog-geometry=") or has_geometry:
 			return "Unknown or duplicate dog diagnostic option: " + argument
 		has_geometry = true
-		if behavior_case != "dog-protection":
-			return "dog-geometry is only valid for dog-protection"
-	if behavior_case != "dog-protection":
+		if behavior_case not in ["dog-protection", "dog-withdrawal"]:
+			return "dog-geometry is only valid for dog-protection or dog-withdrawal"
+	if behavior_case not in ["dog-protection", "dog-withdrawal"]:
 		return ""
 	var variant: Variant = from_arguments(arguments)
 	var allowed: bool = false

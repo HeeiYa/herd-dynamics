@@ -7,6 +7,8 @@ const CLEAR_THREATS_TICK: int = 600
 const END_TICK: int = 1200
 const QUALITY_PERIOD: int = 60
 var geometry_variant: ProductionDogProtectionGeometry.Variant = ProductionDogProtectionGeometry.Variant.NORMAL
+var withdrawal_mode: ProductionDogWithdrawal.Mode = ProductionDogWithdrawal.Mode.ORIGINAL
+var _withdrawal: ProductionDogWithdrawal
 var _world: SimulationWorld
 var _seed: int
 var _sheep_count: int
@@ -44,10 +46,19 @@ func setup(world: SimulationWorld, sheep_count: int, seed_value: int) -> void:
 	_sheep_count = sheep_count
 	_started_usec = Time.get_ticks_usec()
 	var arguments := PackedStringArray(["--dog-geometry=" + ProductionDogProtectionGeometry.variant_name(geometry_variant)])
-	var error: String = ProductionDogProtectionGeometry.argument_error(arguments, "dog-protection", sheep_count, seed_value)
+	var behavior_case: String = "dog-protection"
+	if withdrawal_mode != ProductionDogWithdrawal.Mode.ORIGINAL:
+		behavior_case = "dog-withdrawal"
+		arguments.append("--dog-withdrawal=" + ProductionDogWithdrawal.mode_name(withdrawal_mode))
+	var error: String = ProductionDogProtectionGeometry.argument_error(arguments, behavior_case, sheep_count, seed_value)
+	if error.is_empty():
+		error = ProductionDogWithdrawal.argument_error(arguments, behavior_case, sheep_count, seed_value)
 	if not error.is_empty() or world.config.world_size != Vector2(2400, 1400):
 		_fail(error if not error.is_empty() else "Dog protection requires the declared 2400x1400 world")
 		return
+	if withdrawal_mode != ProductionDogWithdrawal.Mode.ORIGINAL:
+		_withdrawal = ProductionDogWithdrawal.new()
+		_withdrawal.mode = withdrawal_mode
 	_layout.prepare(sheep_count, seed_value)
 	error = _layout.initial_error(world.config.agent_radius, world.config.world_size)
 	if not error.is_empty():
@@ -65,6 +76,12 @@ func before_step(world: SimulationWorld) -> void:
 	var started: int = Time.get_ticks_usec()
 	if world.tick == THREAT_TICK:
 		_prepare_threats()
+	elif _withdrawal != null:
+		_withdrawal.before_step(world, _started_usec)
+		if world.tick == ProductionDogWithdrawal.INTERVENTION_TICK and withdrawal_mode == ProductionDogWithdrawal.Mode.REMOVE_DOGS:
+			for record: ProductionDogProtectionTrace in _records:
+				if record.species == SimTypes.Species.DOG:
+					record.removed_by_protocol = true
 	elif world.tick == CLEAR_THREATS_TICK:
 		for record: ProductionDogProtectionTrace in _records:
 			if record.species != SimTypes.Species.WOLF or not world.store.is_alive(record.handle):
@@ -180,6 +197,8 @@ func observe_step_start(world: SimulationWorld) -> void:
 	if finished:
 		observer_usec += Time.get_ticks_usec() - started
 		return
+	if _withdrawal != null:
+		_withdrawal.observe_step_start(world)
 	for record: ProductionDogProtectionTrace in _records:
 		record.start_active = world.store.is_active(record.handle)
 		if not record.start_active:
@@ -249,6 +268,9 @@ func _register_wolves() -> void:
 		_add_record(actor, SimTypes.Species.WOLF, index)
 	if _wolves.size() != 2:
 		_fail("Exactly two real wolf lives must be registered")
+		return
+	if _withdrawal != null:
+		_withdrawal.register_lives(_dogs, _wolves)
 
 func _add_record(actor: AgentHandle, species: int, group: int) -> void:
 	var record := ProductionDogProtectionTrace.new()
@@ -290,8 +312,10 @@ func _observe_geometry(record: ProductionDogProtectionTrace, context: AgentConte
 		record.observe_exposure_tick(_world.tick, record.start_nearest_target)
 	else:
 		var reason: String = "GEOMETRY_ENDED"
-		if _world.tick >= CLEAR_THREATS_TICK:
+		if _withdrawal == null and _world.tick >= CLEAR_THREATS_TICK:
 			reason = "THREATS_REMOVED"
+		elif withdrawal_mode == ProductionDogWithdrawal.Mode.REMOVE_DOGS and _world.tick >= ProductionDogWithdrawal.INTERVENTION_TICK:
+			reason = "DOGS_REMOVED"
 		record.close_exposure(_world.tick, reason)
 	if record.start_protected_geometry:
 		record.protected_geometry_ticks += 1
@@ -303,6 +327,8 @@ func after_step(world: SimulationWorld) -> void:
 	var tick: int = world.tick - 1
 	for record: ProductionDogProtectionTrace in _records:
 		_observe_actor(record, tick)
+	if _withdrawal != null:
+		_withdrawal.after_step(world, _started_usec)
 	if world.tick % QUALITY_PERIOD == 0:
 		_sample_quality(tick)
 	observed_steps += 1
@@ -333,7 +359,7 @@ func _observe_actor(record: ProductionDogProtectionTrace, tick: int) -> void:
 			if record.first_lease_tick < 0:
 				record.first_lease_tick = tick
 		_observe_dog(record, context, intent, position, tick, elapsed, qualified)
-	else:
+	elif _withdrawal == null:
 		_wolf_steps.append({"wolf": record.handle.key(), "tick": tick, "elapsed_usec": elapsed,
 			"start_x": record.previous_position.x, "start_y": record.previous_position.y,
 			"end_x": position.x, "end_y": position.y, "risk_geometry": record.start_nearest_target != null,
@@ -395,7 +421,7 @@ func _observe_dog(record: ProductionDogProtectionTrace, context: AgentContext, i
 		record.guard_before_threat_tick = tick + 1
 	if owned and intent.behavior == SimTypes.Behavior.GUARD and _world.ai.coordination.get_lease(record.handle, tick) == null:
 		record.guard_without_lease_ticks += 1
-	if tick >= CLEAR_THREATS_TICK:
+	if _withdrawal == null and tick >= CLEAR_THREATS_TICK:
 		if not record.recovery_started:
 			record.recovery_started = true
 			record.recovery_eligible_tick = CLEAR_THREATS_TICK
@@ -550,11 +576,13 @@ func finish_report() -> Dictionary:
 	for actor: AgentHandle in _peers:
 		peer_handles.append(actor.key())
 	var protocol: String = ProductionDogProtectionGeometry.protocol_version(geometry_variant)
+	if _withdrawal != null:
+		protocol = ProductionDogWithdrawal.VERSION
 	var report: Dictionary = report_header(_world, protocol, _seed, _sheep_count, _started_usec)
 	report.merge({"fixture_valid": _fixture_error.is_empty(), "fixture_error": _fixture_error,
 		"fixture_error_details": _fixture_error_details.duplicate(true),
 		"geometry": ProductionDogProtectionGeometry.variant_name(geometry_variant),
-		"stimulus_tick": THREAT_TICK, "remove_wolves_tick": CLEAR_THREATS_TICK,
+		"stimulus_tick": THREAT_TICK, "remove_wolves_tick": CLEAR_THREATS_TICK if _withdrawal == null else -1,
 		"declared_observed_sheep": 80, "declared_dogs": 4, "declared_wolves": 2,
 		"registered_cohort": _cohort.size(), "registered_background": _background.size(),
 		"registered_dogs": _dogs.size(), "registered_wolves": _wolves.size(),
@@ -577,4 +605,7 @@ func finish_report() -> Dictionary:
 		"background_evidence": "920 extra sheep are ordinary active participants in motion, AI and common resources. Only 60tick snapshots are taken; net displacement >=1px is a sampled lower bound, and zero sampled intrusion/missing is not a continuous-window claim. Fixed seed does not hold autonomous foreground trajectories equal across loads.",
 		"recovery_evidence": "All dogs still alive at wolf removal are separately eligible to regain a current local protection sample and GUARD inside the unchanged arrival distance. Already guarding is a valid recovery endpoint; no artificial extra movement is demanded. No permanent flock identity is claimed.",
 	})
+	if _withdrawal != null:
+		report.merge(_withdrawal.report(), true)
+		report["recovery_evidence"] = "Not applicable: this protocol never removes wolves at600. Use withdrawal_outcomes for wolf response, retaining all original dog/sheep/wolf identities."
 	return report

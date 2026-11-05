@@ -31,11 +31,13 @@ func _run() -> void:
 		get_tree().quit(1)
 		return
 	var dog_error: String = ProductionDogProtectionGeometry.argument_error(OS.get_cmdline_user_args(), behavior_case, sheep_count, seed_value)
+	if dog_error.is_empty():
+		dog_error = ProductionDogWithdrawal.argument_error(OS.get_cmdline_user_args(), behavior_case, sheep_count, seed_value)
 	if not dog_error.is_empty():
 		push_error(dog_error)
 		get_tree().quit(1)
 		return
-	if behavior_case not in ["two-flocks", "dog-protection", "hunt-cooperation", "forage-migration", "forage-empty"]:
+	if behavior_case not in ["two-flocks", "dog-protection", "dog-withdrawal", "hunt-cooperation", "forage-migration", "forage-empty"]:
 		push_error("Unknown production behavior case: " + behavior_case)
 		get_tree().quit(1)
 		return
@@ -117,7 +119,7 @@ func _run() -> void:
 		saved = _write_records(output.path_join("dog-threats.csv"), report["dog_threats"]) and saved
 	else:
 		saved = _write_records(output.path_join("terminal.csv"), report["terminal"]) and saved
-		if behavior_case == "dog-protection":
+		if behavior_case in ["dog-protection", "dog-withdrawal"]:
 			saved = _write_records(output.path_join("initial-roster.csv"), report["initial_roster"]) and saved
 			saved = _write_records(output.path_join("preflight.csv"), report["preflight"]) and saved
 			saved = _write_records(output.path_join("dog-contexts.csv"), report["dog_contexts"]) and saved
@@ -126,6 +128,11 @@ func _run() -> void:
 			saved = _write_records(output.path_join("anchor-changes.csv"), report["anchor_changes"]) and saved
 			saved = _write_records(output.path_join("cohort-samples.csv"), report["cohort_samples"]) and saved
 			saved = _write_records(output.path_join("captures.csv"), report["captures"]) and saved
+			if behavior_case == "dog-withdrawal":
+				saved = _write_records(output.path_join("withdrawal-records.csv"), report["withdrawal_records"]) and saved
+				saved = _write_records(output.path_join("withdrawal-pre299.csv"), report["withdrawal_pre299"]) and saved
+				saved = _write_records(output.path_join("withdrawal-boundary.csv"), report["withdrawal_boundary"]) and saved
+				saved = _write_records(output.path_join("withdrawal-dog-controls.csv"), report["withdrawal_dog_controls"]) and saved
 		elif behavior_case == "hunt-cooperation":
 			saved = _write_records(output.path_join("roles.csv"), report["roles"]) and saved
 			saved = _write_records(output.path_join("hunt-contexts.csv"), report["samples"]) and saved
