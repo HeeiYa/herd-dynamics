@@ -3,6 +3,7 @@ extends RefCounted
 ## Declared external stimuli only. Never searches for a passing placement or
 ## supplies any live position, target, reservation or result to an animal's AI.
 const VERSION: String = "production-dog-protection-v1"
+const ANCHOR_VERSION: String = "production-dog-protection-v2"
 const COHORT_SIZE: int = 80
 const DOG_COUNT: int = 4
 const GROUP_CENTERS: Array[Vector2] = [Vector2(600, 700), Vector2(1800, 700)]
@@ -10,7 +11,7 @@ const SPACING: float = 32.0
 const WOLF_OFFSET: float = 140.0
 const OBLIQUE_ANGLE: float = PI / 9.0
 const BACKGROUND_EXCLUSION_RADIUS: float = 440.0
-enum Variant { NORMAL, OBLIQUE, INVALID }
+enum Variant { NORMAL, OBLIQUE, INVALID, ANCHOR_NORMAL, ANCHOR_OBLIQUE }
 
 var positions: Array[Vector2] = []
 var species: PackedInt32Array = PackedInt32Array()
@@ -23,6 +24,10 @@ static func from_arguments(arguments: PackedStringArray) -> Variant:
 					return Variant.NORMAL
 				"oblique":
 					return Variant.OBLIQUE
+				"anchor-normal":
+					return Variant.ANCHOR_NORMAL
+				"anchor-oblique":
+					return Variant.ANCHOR_OBLIQUE
 				_:
 					return Variant.INVALID
 	return Variant.NORMAL
@@ -33,8 +38,18 @@ static func variant_name(variant: Variant) -> String:
 			return "normal"
 		Variant.OBLIQUE:
 			return "oblique"
+		Variant.ANCHOR_NORMAL:
+			return "anchor-normal"
+		Variant.ANCHOR_OBLIQUE:
+			return "anchor-oblique"
 		_:
 			return "invalid"
+
+static func is_anchor_variant(variant: Variant) -> bool:
+	return variant in [Variant.ANCHOR_NORMAL, Variant.ANCHOR_OBLIQUE]
+
+static func protocol_version(variant: Variant) -> String:
+	return ANCHOR_VERSION if is_anchor_variant(variant) else VERSION
 
 static func first_runs() -> Array[Dictionary]:
 	return [
@@ -43,6 +58,15 @@ static func first_runs() -> Array[Dictionary]:
 		{"sheep": 80, "seed": 43, "geometry": "oblique"},
 		{"sheep": 80, "seed": 44, "geometry": "oblique"},
 		{"sheep": 1000, "seed": 42, "geometry": "oblique"},
+	]
+
+static func anchor_runs() -> Array[Dictionary]:
+	return [
+		{"sheep": 80, "seed": 42, "geometry": "anchor-normal"},
+		{"sheep": 80, "seed": 42, "geometry": "anchor-oblique"},
+		{"sheep": 80, "seed": 43, "geometry": "anchor-oblique"},
+		{"sheep": 80, "seed": 44, "geometry": "anchor-oblique"},
+		{"sheep": 1000, "seed": 42, "geometry": "anchor-oblique"},
 	]
 
 static func argument_error(arguments: PackedStringArray, behavior_case: String, total: int, seed_value: int) -> String:
@@ -59,11 +83,13 @@ static func argument_error(arguments: PackedStringArray, behavior_case: String, 
 		return ""
 	var variant: Variant = from_arguments(arguments)
 	var allowed: bool = false
-	for run: Dictionary in first_runs():
+	var declared_runs: Array[Dictionary] = first_runs()
+	declared_runs.append_array(anchor_runs())
+	for run: Dictionary in declared_runs:
 		if total == run["sheep"] and seed_value == run["seed"] and variant_name(variant) == run["geometry"]:
 			allowed = true
 	if not allowed:
-		return "Dog protection accepts only the five declared population/seed/geometry combinations"
+		return "Dog protection accepts only the two declared five-run population/seed/geometry matrices"
 	var has_count: bool = false
 	var has_seed: bool = false
 	for argument: String in arguments:
@@ -137,17 +163,39 @@ static func wolf_position(first_dog: Vector2, second_dog: Vector2, variant: Vari
 		normal = normal.rotated(OBLIQUE_ANGLE)
 	return (first_dog + second_dog) * 0.5 + normal * WOLF_OFFSET
 
+static func anchor_wolf_position(subject_position: Vector2, observed_anchor: Vector2, variant: Variant) -> Vector2:
+	assert(is_anchor_variant(variant))
+	var direction: Vector2 = observed_anchor - subject_position
+	if direction.length_squared() == 0.0:
+		direction = Vector2.UP
+	else:
+		direction = direction.normalized()
+	if variant == Variant.ANCHOR_OBLIQUE:
+		direction = direction.rotated(OBLIQUE_ANGLE)
+	return subject_position + direction * WOLF_OFFSET
+
 static func opportunity_error(wolf: Vector2, dogs: Array[Vector2], anchors: Array[Vector2], radius: float, world_size: Vector2, risk_radius: float, perception_radius: float, protection_radius: float) -> String:
 	if dogs.size() != 2 or anchors.size() != 2:
 		return "Each stimulus requires exactly two registered dogs and their valid anchors"
 	if not ProductionHuntGeometry.body_inside_world(wolf, radius, world_size):
 		return "A requested wolf body crosses the world boundary"
 	for index: int in dogs.size():
-		if not dogs[index].is_finite() or not anchors[index].is_finite():
-			return "A stimulus reference is nonfinite"
-		var distance: float = dogs[index].distance_to(wolf)
-		if distance <= risk_radius or distance > perception_radius:
-			return "A requested wolf is already inside dog-risk range or outside dog perception"
-		if anchors[index].distance_to(wolf) >= protection_radius:
-			return "A requested wolf is outside a dog's observed protection radius"
+		var error: String = _reference_opportunity_error(wolf, dogs[index], anchors[index], risk_radius, perception_radius, protection_radius)
+		if not error.is_empty():
+			return error
+	return ""
+
+static func subject_opportunity_error(wolf: Vector2, subject_position: Vector2, observed_anchor: Vector2, radius: float, world_size: Vector2, risk_radius: float, perception_radius: float, protection_radius: float) -> String:
+	if not ProductionHuntGeometry.body_inside_world(wolf, radius, world_size):
+		return "A requested wolf body crosses the world boundary"
+	return _reference_opportunity_error(wolf, subject_position, observed_anchor, risk_radius, perception_radius, protection_radius)
+
+static func _reference_opportunity_error(wolf: Vector2, dog: Vector2, anchor: Vector2, risk_radius: float, perception_radius: float, protection_radius: float) -> String:
+	if not dog.is_finite() or not anchor.is_finite():
+		return "A stimulus reference is nonfinite"
+	var distance: float = dog.distance_to(wolf)
+	if distance <= risk_radius or distance > perception_radius:
+		return "A requested wolf is already inside dog-risk range or outside dog perception"
+	if anchor.distance_to(wolf) >= protection_radius:
+		return "A requested wolf is outside a dog's observed protection radius"
 	return ""

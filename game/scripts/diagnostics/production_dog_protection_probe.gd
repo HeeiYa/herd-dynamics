@@ -17,6 +17,8 @@ var _layout := ProductionDogProtectionGeometry.new()
 var _cohort: Array[AgentHandle] = []
 var _background: Array[AgentHandle] = []
 var _dogs: Array[AgentHandle] = []
+var _subjects: Array[AgentHandle] = []
+var _peers: Array[AgentHandle] = []
 var _wolves: Array[AgentHandle] = []
 var _records: Array[ProductionDogProtectionTrace] = []
 var _requested_wolves: Array[Vector2] = []
@@ -77,6 +79,7 @@ func _prepare_threats() -> void:
 	if _dogs.size() != 4:
 		_fail("Four complete registered dog lives are required before the stimulus")
 		return
+	var anchor_variant: bool = ProductionDogProtectionGeometry.is_anchor_variant(geometry_variant)
 	for group: int in 2:
 		var positions: Array[Vector2] = []
 		var anchors: Array[Vector2] = []
@@ -84,9 +87,12 @@ func _prepare_threats() -> void:
 			var dog: AgentHandle = _dogs[group * 2 + member]
 			var dense: int = _world.store.resolve(dog)
 			var context: AgentContext = _world.ai.inspect(dog)
-			if dense < 0 or not _world.store.is_active(dog) or context == null or not _current_flock(context, _world.tick):
-				_fail("A declared dog lacks an active life and genuinely observed current protection sample", {
+			var requires_sample: bool = not anchor_variant or member == 0
+			var sample_valid: bool = context != null and _current_flock(context, _world.tick)
+			if dense < 0 or not _world.store.is_active(dog) or context == null or (requires_sample and not sample_valid):
+				_fail("A declared dog lacks an active life or its required current protection sample", {
 					"dog": dog.key(), "group": group, "active": _world.store.is_active(dog),
+					"current_sample_required": requires_sample,
 					"context_present": context != null, "flock_count": context.flock_count if context != null else -1,
 					"current_sample_count": context.flock_sample_count if context != null else -1,
 					"current_sample_observed_tick": context.flock_sample_observed_tick if context != null else -1,
@@ -94,20 +100,33 @@ func _prepare_threats() -> void:
 				return
 			positions.append(_world.store.position_current[dense])
 			anchors.append(context.protection_anchor)
-		var wolf: Vector2 = ProductionDogProtectionGeometry.wolf_position(positions[0], positions[1], geometry_variant)
+		var wolf: Vector2
+		if anchor_variant:
+			wolf = ProductionDogProtectionGeometry.anchor_wolf_position(positions[0], anchors[0], geometry_variant)
+		else:
+			wolf = ProductionDogProtectionGeometry.wolf_position(positions[0], positions[1], geometry_variant)
 		_requested_wolves.append(wolf)
 		for member: int in 2:
 			var context: AgentContext = _world.ai.inspect(_dogs[group * 2 + member])
 			_preflight.append({"dog": _dogs[group * 2 + member].key(), "group": group, "tick": _world.tick,
+				"declared_role": _dog_role(_dogs[group * 2 + member]),
+				"current_sample_required": not anchor_variant or member == 0,
+				"current_sample_valid": _current_flock(context, _world.tick),
 				"dog_x": positions[member].x, "dog_y": positions[member].y,
 				"anchor_x": anchors[member].x, "anchor_y": anchors[member].y,
 				"sample_count": context.flock_sample_count, "sample_observed_tick": context.flock_sample_observed_tick,
 				"sample_expires_tick": context.flock_sample_expires_tick,
 				"wolf_x": wolf.x, "wolf_y": wolf.y, "dog_distance": positions[member].distance_to(wolf),
 				"anchor_distance": anchors[member].distance_to(wolf)})
-		var error: String = ProductionDogProtectionGeometry.opportunity_error(wolf, positions, anchors,
-			_world.config.agent_radius, _world.config.world_size, _world.ai.settings.dog_risk_radius,
-			_world.config.perception_radius, _world.ai.settings.protection_radius)
+		var error: String
+		if anchor_variant:
+			error = ProductionDogProtectionGeometry.subject_opportunity_error(wolf, positions[0], anchors[0],
+				_world.config.agent_radius, _world.config.world_size, _world.ai.settings.dog_risk_radius,
+				_world.config.perception_radius, _world.ai.settings.protection_radius)
+		else:
+			error = ProductionDogProtectionGeometry.opportunity_error(wolf, positions, anchors,
+				_world.config.agent_radius, _world.config.world_size, _world.ai.settings.dog_risk_radius,
+				_world.config.perception_radius, _world.ai.settings.protection_radius)
 		if not error.is_empty():
 			_fail(error, {"group": group, "wolf_index": group, "wolf_x": wolf.x, "wolf_y": wolf.y,
 				"preflight_rows_begin": group * 2, "preflight_rows_count": 2})
@@ -137,7 +156,8 @@ func _prepare_threats() -> void:
 	for position: Vector2 in _requested_wolves:
 		_world.queue_place(SimTypes.Species.WOLF, position)
 	_events.append({"event": "place_declared_wolves", "input_tick": _world.tick,
-		"meaning": "One fixed relative placement per dog pair; no retry or forced target/lease"})
+		"geometry": ProductionDogProtectionGeometry.variant_name(geometry_variant),
+		"meaning": "One predeclared relative placement per initial region; no retry or forced target/lease"})
 
 func _body_conflict_details(wolf_index: int, wolf: Vector2, dense: int, distance: float) -> Dictionary:
 	var blocker: AgentHandle = _world.store.handle_at(dense)
@@ -193,6 +213,10 @@ func _register_initial() -> void:
 			cohort_name = "observed_sheep"
 		elif index < 84:
 			_dogs.append(actor)
+			if ProductionDogProtectionGeometry.is_anchor_variant(geometry_variant) and index % 2 == 1:
+				_peers.append(actor)
+			else:
+				_subjects.append(actor)
 			_add_record(actor, SimTypes.Species.DOG, (index - 80) / 2)
 			cohort_name = "dog"
 		else:
@@ -203,6 +227,14 @@ func _register_initial() -> void:
 			_background_decision_ticks.append(context.last_decision_tick)
 		_initial.append({"handle": actor.key(), "cohort": cohort_name, "registration_index": index,
 			"tick": _world.tick, "species": _world.store.species[index], "x": position.x, "y": position.y})
+
+func _dog_role(actor: AgentHandle) -> String:
+	if not ProductionDogProtectionGeometry.is_anchor_variant(geometry_variant):
+		return "paired_opportunity"
+	for subject: AgentHandle in _subjects:
+		if subject.same_life(actor):
+			return "opportunity_subject"
+	return "peer"
 
 func _register_wolves() -> void:
 	for dense: int in _world.store.count:
@@ -383,6 +415,7 @@ func _observe_dog(record: ProductionDogProtectionTrace, context: AgentContext, i
 	var row: Dictionary = _dog_diagnostics.contexts.back()
 	var dense: int = _world.store.resolve(record.handle)
 	row.merge({"start_x": record.previous_position.x, "start_y": record.previous_position.y,
+		"declared_role": _dog_role(record.handle),
 		"start_velocity_x": record.start_velocity.x, "start_velocity_y": record.start_velocity.y,
 		"end_velocity_x": _world.store.velocity_current[dense].x, "end_velocity_y": _world.store.velocity_current[dense].y,
 		"start_anchor_x": record.start_anchor.x, "start_anchor_y": record.start_anchor.y,
@@ -487,10 +520,21 @@ func _fail(reason: String, details: Dictionary = {}) -> void:
 
 func finish_report() -> Dictionary:
 	var records: Array[Dictionary] = []
+	var subject_records: Array[Dictionary] = []
+	var peer_records: Array[Dictionary] = []
 	for record: ProductionDogProtectionTrace in _records:
 		record.close_exposure(record.exposure_last_visible_tick + 1, "OBSERVATION_WINDOW_ENDED")
 		record.alive = _world.store.is_alive(record.handle)
-		records.append(record.to_dictionary())
+		var row: Dictionary = record.to_dictionary()
+		if record.species == SimTypes.Species.DOG:
+			row["declared_role"] = _dog_role(record.handle)
+			if row["declared_role"] == "peer":
+				peer_records.append(row)
+			else:
+				subject_records.append(row)
+		else:
+			row["declared_role"] = "stimulus_wolf"
+		records.append(row)
 	var terminal: Array[Dictionary] = []
 	for actor: AgentHandle in _cohort:
 		terminal.append({"handle": actor.key(), "cohort": "observed_sheep", "alive": _world.store.is_alive(actor), "active": _world.store.is_active(actor)})
@@ -499,7 +543,14 @@ func finish_report() -> Dictionary:
 	var requested_positions: Array[Array] = []
 	for position: Vector2 in _requested_wolves:
 		requested_positions.append([position.x, position.y])
-	var report: Dictionary = report_header(_world, ProductionDogProtectionGeometry.VERSION, _seed, _sheep_count, _started_usec)
+	var subject_handles: Array[String] = []
+	var peer_handles: Array[String] = []
+	for actor: AgentHandle in _subjects:
+		subject_handles.append(actor.key())
+	for actor: AgentHandle in _peers:
+		peer_handles.append(actor.key())
+	var protocol: String = ProductionDogProtectionGeometry.protocol_version(geometry_variant)
+	var report: Dictionary = report_header(_world, protocol, _seed, _sheep_count, _started_usec)
 	report.merge({"fixture_valid": _fixture_error.is_empty(), "fixture_error": _fixture_error,
 		"fixture_error_details": _fixture_error_details.duplicate(true),
 		"geometry": ProductionDogProtectionGeometry.variant_name(geometry_variant),
@@ -507,6 +558,7 @@ func finish_report() -> Dictionary:
 		"declared_observed_sheep": 80, "declared_dogs": 4, "declared_wolves": 2,
 		"registered_cohort": _cohort.size(), "registered_background": _background.size(),
 		"registered_dogs": _dogs.size(), "registered_wolves": _wolves.size(),
+		"registered_opportunity_subjects": subject_handles, "registered_peers": peer_handles,
 		"requested_wolf_positions": requested_positions,
 		"risk_radius": _world.ai.settings.dog_risk_radius, "perception_radius": _world.config.perception_radius,
 		"protection_radius": _world.ai.settings.protection_radius, "guard_arrival_distance": _world.ai.settings.guard_arrival_distance,
@@ -516,6 +568,9 @@ func finish_report() -> Dictionary:
 		"wolf_steps": _wolf_steps.duplicate(true), "anchor_changes": _anchor_changes.duplicate(true),
 		"captures": _captures.duplicate(true), "events": _events.duplicate(true), "quality_observer_usec": _quality_observer_usec,
 		"outcomes": [ProductionBehaviorTrace.summarize(records, "dog_intercept"), ProductionBehaviorTrace.summarize(records, "wolf_retreat_from_dog")],
+		"subject_outcomes": ProductionBehaviorTrace.summarize(subject_records, "dog_intercept"),
+		"peer_outcomes": ProductionBehaviorTrace.summarize(peer_records, "dog_intercept"),
+		"subject_assignment": "v1 retains both dogs per initial region as paired opportunity subjects. v2 fixes dog registration indices0/2 as the two opportunity subjects and indices1/3 as peers before any outcome. Only subjects require current flock evidence and <=180px perception/<200px protection at stimulus preflight; every dog must still be >105px from either new wolf. Peers retain all observations, may legitimately win a reservation, and are not forced to guard. The all-four-dog denominator remains independent of these two subcohorts.",
 		"eligibility": "All four dog and two wolf lives remain in records. Dog exposure is actual pre-AI perception geometry; protected_geometry additionally requires a valid historical flock sample and actual wolf within its anchor radius. Wolf exposure is actual dog-risk geometry. Known/direct, owned behavior, actual >=1px and narrower matching DEFEND lease evidence are separate. One defender per wolf is normal; four exposed dogs does not mean four required chasers.",
 		"motion_evidence": "Each owned response contributes positive projection of real step displacement along that step's intent. >=1px is unchanged. Narrow lease progress additionally requires matching full actor/target, token, TTL, live target and valid observed protection evidence; it does not replace the broad four-dog denominator. Retreat before active intercept is visible in separate wolf steps and dog contexts, not labeled successful active driving.",
 		"anchor_evidence": "Context sample centers/counts/ticks are historical AI observations. Anchor cells are derived from these centers. Change rows count only the fixed80 sheep geometrically visible at the post-motion endpoint, excluding background; they are not same-scan candidate scores or permanent flock membership. No production query or strategy is repeated by this observer.",

@@ -22,6 +22,9 @@ func _run() -> void:
 	_check_authoritative_evidence()
 	_check_progress_and_denominators()
 	_check_recovery_summary()
+	_check_anchor_arguments_and_geometry()
+	_check_anchor_subjects_and_peer_evidence()
+	_check_anchor_atomic_peer_risk()
 	print("DOG_PROTECTION_TESTS checks=%d failures=%d" % [_checks, _failures])
 	quit(0 if _failures == 0 else 1)
 
@@ -109,8 +112,9 @@ func _close(world: SimulationWorld) -> void:
 	world.ai.reset()
 	world.free()
 
-func _registered(world: SimulationWorld) -> ProductionDogProtectionProbe:
+func _registered(world: SimulationWorld, variant: ProductionDogProtectionGeometry.Variant = ProductionDogProtectionGeometry.Variant.NORMAL) -> ProductionDogProtectionProbe:
 	var probe := ProductionDogProtectionProbe.new()
+	probe.geometry_variant = variant
 	probe.setup(world, 80, 42)
 	_check(world.store.count == 0, "Setup queues ordinary stage0 placements")
 	world._apply_commands()
@@ -337,4 +341,78 @@ func _check_recovery_summary() -> void:
 	old_intent.owner_token = 16
 	probe._observe_dog(unowned, context, old_intent, position, 600, 3000, false)
 	_check(unowned.recovery_tick < 0 and unowned.recovery_v2_tick < 0, "An old owner cannot supply a current recovery endpoint")
+	_close(world)
+
+func _check_anchor_arguments_and_geometry() -> void:
+	var runs: Array[Dictionary] = ProductionDogProtectionGeometry.anchor_runs()
+	_check(runs.size() == 5 and ProductionDogProtectionGeometry.first_runs().size() == 5, "The second predeclared matrix supplements rather than replaces the five original runs")
+	for run: Dictionary in runs:
+		var arguments := PackedStringArray(["--dog-geometry=" + run["geometry"], "--sheep=" + str(run["sheep"]), "--seed=" + str(run["seed"])])
+		var variant: ProductionDogProtectionGeometry.Variant = ProductionDogProtectionGeometry.from_arguments(arguments)
+		_check(ProductionDogProtectionGeometry.argument_error(arguments, "dog-protection", run["sheep"], run["seed"]).is_empty(), "Each of the five anchor combinations is explicit and valid")
+		_check(ProductionDogProtectionGeometry.variant_name(variant) == run["geometry"] and ProductionDogProtectionGeometry.protocol_version(variant) == ProductionDogProtectionGeometry.ANCHOR_VERSION, "Anchor variants keep their own v2 protocol identity")
+	_check(ProductionDogProtectionGeometry.from_arguments(PackedStringArray()) == ProductionDogProtectionGeometry.Variant.NORMAL, "Omitting geometry still chooses the original paired protocol")
+	_check(ProductionDogProtectionGeometry.protocol_version(ProductionDogProtectionGeometry.Variant.OBLIQUE) == ProductionDogProtectionGeometry.VERSION, "Original oblique evidence still names v1")
+	_check(not ProductionDogProtectionGeometry.argument_error(PackedStringArray(["--dog-geometry=anchor-normal"]), "dog-protection", 80, 43).is_empty(), "New geometry cannot silently expand its declared seed matrix")
+	_check(not ProductionDogProtectionGeometry.argument_error(PackedStringArray(["--dog-geometry=anchor-oblique", "--dog-geometry=anchor-normal"]), "dog-protection", 80, 42).is_empty(), "Conflicting new variants are rejected without last-value wins")
+	var subject := Vector2(600, 600)
+	var anchor := Vector2(700, 600)
+	var normal: Vector2 = ProductionDogProtectionGeometry.anchor_wolf_position(subject, anchor, ProductionDogProtectionGeometry.Variant.ANCHOR_NORMAL)
+	var oblique: Vector2 = ProductionDogProtectionGeometry.anchor_wolf_position(subject, anchor, ProductionDogProtectionGeometry.Variant.ANCHOR_OBLIQUE)
+	_check(normal == Vector2(740, 600), "Anchor-normal is exactly140px toward the one declared historical anchor")
+	_check(oblique.is_equal_approx(subject + Vector2(140, 0).rotated(PI / 9.0)), "Anchor-oblique applies the one predeclared positive20degree rotation")
+	_check(ProductionDogProtectionGeometry.anchor_wolf_position(subject, subject, ProductionDogProtectionGeometry.Variant.ANCHOR_NORMAL) == Vector2(600, 460), "A zero reference direction uses fixedUP without searching")
+	_check(ProductionDogProtectionGeometry.anchor_wolf_position(subject, subject, ProductionDogProtectionGeometry.Variant.ANCHOR_OBLIQUE).is_equal_approx(subject + Vector2.UP.rotated(PI / 9.0) * 140.0), "The zero-direction oblique fallback also keeps the exact declared rotation")
+	_check(ProductionDogProtectionGeometry.subject_opportunity_error(normal, subject, anchor, 13, Vector2(2400, 1400), 105, 180, 200).is_empty(), "The fixed subject has real unchanged perception and protection opportunity")
+	var dogs: Array[Vector2] = [subject, Vector2(600, 620)]
+	var anchors: Array[Vector2] = [anchor, Vector2(1000, 1000)]
+	_check(not ProductionDogProtectionGeometry.opportunity_error(normal, dogs, anchors, 13, Vector2(2400, 1400), 105, 180, 200).is_empty(), "The same different-anchor peer remains invalid under the original paired contract")
+	_check(not ProductionDogProtectionGeometry.subject_opportunity_error(Vector2(705, 600), subject, anchor, 13, Vector2(2400, 1400), 105, 180, 200).is_empty(), "The new subject preflight does not relax the105px exclusion")
+	_check(not ProductionDogProtectionGeometry.subject_opportunity_error(Vector2(740, 600), subject, Vector2(940, 600), 13, Vector2(2400, 1400), 105, 180, 200).is_empty(), "The new subject preflight does not relax the200px strict protection boundary")
+
+func _check_anchor_subjects_and_peer_evidence() -> void:
+	var world: SimulationWorld = _new_world()
+	var probe: ProductionDogProtectionProbe = _registered(world, ProductionDogProtectionGeometry.Variant.ANCHOR_NORMAL)
+	_fixture_flock_samples(world, probe)
+	_check(probe._subjects.size() == 2 and probe._peers.size() == 2 and probe._subjects[0].same_life(probe._dogs[0]) and probe._subjects[1].same_life(probe._dogs[2]), "Opportunity identities are fixed by original registration order before outcomes")
+	for peer: AgentHandle in probe._peers:
+		var context: AgentContext = world.ai.inspect(peer)
+		context.flock_count = 0
+		context.flock_sample_count = 0
+		context.flock_sample_expires_tick = 1
+	world.tick = 240
+	probe.before_step(world)
+	_check(not probe.finished and world.counts()[SimTypes.Species.WOLF] == 0, "Peers need not share a current protection sample, and a passing batch still waits for stage0")
+	world._apply_commands()
+	probe.observe_step_start(world)
+	var report: Dictionary = probe.finish_report()
+	_check(report["fixture_valid"] and report["protocol"] == ProductionDogProtectionGeometry.ANCHOR_VERSION and report["registered_wolves"] == 2, "The actual two-wolf registration is separately labeled v2")
+	_check(report["outcomes"][0]["cohort"] == 4 and report["subject_outcomes"]["cohort"] == 2 and report["peer_outcomes"]["cohort"] == 2, "Four-dog, fixed-subject and peer denominators coexist without removing nonchasers")
+	_check(report["registered_opportunity_subjects"] == [probe._dogs[0].key(), probe._dogs[2].key()], "The report transfers the exact predeclared subject lives")
+	_check(report["preflight"][1]["declared_role"] == "peer" and not report["preflight"][1]["current_sample_required"] and not report["preflight"][1]["current_sample_valid"], "A peer's missing sample is retained as evidence instead of being hidden or rewritten")
+	_close(world)
+	world = _new_world()
+	probe = _registered(world, ProductionDogProtectionGeometry.Variant.ANCHOR_NORMAL)
+	_fixture_flock_samples(world, probe)
+	var subject_context: AgentContext = world.ai.inspect(probe._dogs[0])
+	subject_context.flock_sample_expires_tick = 240
+	world.tick = 240
+	probe.before_step(world)
+	report = probe.finish_report()
+	_check(not report["fixture_valid"] and report["fixture_error_details"]["dog"] == probe._dogs[0].key(), "A missing subject sample cannot silently transfer opportunity to the valid peer")
+	_check(not world.has_pending_observer_commands(), "Subject failure leaves no partial stimulus batch")
+	_close(world)
+
+func _check_anchor_atomic_peer_risk() -> void:
+	var world: SimulationWorld = _new_world()
+	var probe: ProductionDogProtectionProbe = _registered(world, ProductionDogProtectionGeometry.Variant.ANCHOR_NORMAL)
+	_fixture_flock_samples(world, probe)
+	var peer: AgentHandle = probe._peers[0]
+	world.store.relocate(peer, Vector2(620, 420))
+	world.tick = 240
+	probe.before_step(world)
+	var report: Dictionary = probe.finish_report()
+	_check(not report["fixture_valid"] and report["fixture_error"] == "A requested wolf starts inside another dog's risk radius", "A subject-valid point still fails when it starts within a peer's105px risk circle")
+	_check(report["fixture_error_details"]["blocker"] == peer.key() and report["fixture_error_details"]["distance"] == 50.0, "The retained peer is the exact blocker, not a missing-subject or arbitrary overlap diagnosis")
+	_check(report["requested_wolf_positions"].size() == 2 and world.counts()[SimTypes.Species.WOLF] == 0 and not world.has_pending_observer_commands(), "Both positions are checked atomically; one peer conflict never launches the other wolf alone")
 	_close(world)
