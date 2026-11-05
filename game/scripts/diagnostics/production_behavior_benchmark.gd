@@ -14,6 +14,12 @@ func _run() -> void:
 			options[pair[0]] = pair[1]
 	var sheep_count: int = int(options.get("sheep", "80"))
 	var behavior_case: String = options.get("behavior-case", "two-flocks")
+	var seed_value: int = int(options.get("seed", "42"))
+	var forage_error: String = ProductionForageCohort.argument_error(OS.get_cmdline_user_args(), behavior_case, sheep_count, seed_value)
+	if not forage_error.is_empty():
+		push_error(forage_error)
+		get_tree().quit(1)
+		return
 	var geometry_error: String = ProductionHuntGeometry.argument_error(OS.get_cmdline_user_args(), behavior_case, sheep_count)
 	if not geometry_error.is_empty():
 		push_error(geometry_error)
@@ -40,7 +46,7 @@ func _run() -> void:
 	if behavior_case in ["forage-migration", "forage-empty"]:
 		config.grass_recovery_rate = 0.0
 	var scenario := ScenarioConfig.new()
-	scenario.random_seed = int(options.get("seed", "42"))
+	scenario.random_seed = seed_value
 	scenario.sheep_count = 0
 	scenario.wolf_count = 0
 	scenario.dog_count = 0
@@ -79,7 +85,7 @@ func _run() -> void:
 		var failure_output: String = options.get("output", "user://production-behavior")
 		DirAccess.make_dir_recursive_absolute(failure_output)
 		_write_json(failure_output.path_join("summary.json"), report)
-		push_error("Production hunt fixture rejected: " + str(report["fixture_error"]))
+		push_error("Production behavior fixture rejected: " + str(report["fixture_error"]))
 		_main.queue_free()
 		await get_tree().process_frame
 		get_tree().quit(1)
@@ -110,6 +116,11 @@ func _run() -> void:
 			saved = _write_records(output.path_join("forage-samples.csv"), report["forage_samples"]) and saved
 			saved = _write_records(output.path_join("forage-events.csv"), report["forage_events"]) and saved
 			saved = _write_records(output.path_join("forage-terminal-context.csv"), report["forage_terminal_context"]) and saved
+			if report.get("layout", "") == "fixed-cohort80":
+				saved = _write_records(output.path_join("initial-cohort.csv"), report["initial_cohort"]) and saved
+				saved = _write_records(output.path_join("initial-background.csv"), report["initial_background"]) and saved
+				saved = _write_records(output.path_join("background-quality.csv"), report["background_quality"]) and saved
+				saved = _write_records(output.path_join("background-intrusions.csv"), report["background_intrusions"]) and saved
 	print(JSON.stringify({"protocol": report["protocol"], "seed": report["seed"], "sheep": sheep_count,
 		"production_backend_valid": valid_backend, "outcomes": report["outcomes"], "behavior_case": behavior_case,
 		"target_invalidation": report.get("target_invalidation", {}), "output": output}))

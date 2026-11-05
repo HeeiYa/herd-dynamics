@@ -304,6 +304,7 @@ func _setup_behavior_probe(world: SimulationWorld) -> void:
 		"forage-migration", "forage-empty":
 			var forage := ProductionForageProbe.new()
 			forage.empty_control = behavior_case == "forage-empty"
+			forage.layout = ProductionForageCohort.from_arguments(arguments)
 			_behavior_probe = forage
 		_:
 			push_error("Unknown production behavior case: " + behavior_case)

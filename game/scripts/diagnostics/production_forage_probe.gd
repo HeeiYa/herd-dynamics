@@ -9,6 +9,7 @@ const SPACING: float = 32.0
 # Require substantially more than that noise before recording physical eating.
 const HUNGER_EVIDENCE_EPSILON: float = 0.0000002
 var empty_control: bool = false
+var layout: ProductionForageCohort.Layout = ProductionForageCohort.Layout.ORIGINAL
 var _world: SimulationWorld
 var _seed: int
 var _sheep_count: int
@@ -19,6 +20,8 @@ var _depleted_cells: PackedInt32Array = PackedInt32Array()
 var _depleted_food: float = 0.0
 var _actual_consumed_after_drought: float = 0.0
 var _quality: Array[Dictionary] = []
+var _fixed_cohort: ProductionForageCohort
+var _fixture_error: String = ""
 
 func setup(world: SimulationWorld, sheep_count: int, seed_value: int) -> void:
 	assert(world.store.count == 0 and sheep_count >= 8 and sheep_count <= 1000)
@@ -29,6 +32,9 @@ func setup(world: SimulationWorld, sheep_count: int, seed_value: int) -> void:
 	_sheep_count = sheep_count
 	_started_usec = Time.get_ticks_usec()
 	world.diagnostic_step_started = observe_step_start
+	if layout == ProductionForageCohort.Layout.FIXED_COHORT80:
+		_setup_fixed_cohort(sheep_count, seed_value)
+		return
 	var random := RandomNumberGenerator.new()
 	random.seed = seed_value
 	var columns: int = ceili(sqrt(float(sheep_count)))
@@ -36,6 +42,25 @@ func setup(world: SimulationWorld, sheep_count: int, seed_value: int) -> void:
 	for index: int in sheep_count:
 		var offset := Vector2(index % columns - (columns - 1) * 0.5, index / columns - (rows - 1) * 0.5) * SPACING
 		world.queue_place(SimTypes.Species.SHEEP, Vector2(1200, 700) + offset + Vector2(random.randf_range(-2, 2), random.randf_range(-2, 2)))
+
+func _setup_fixed_cohort(sheep_count: int, seed_value: int) -> void:
+	var started: int = Time.get_ticks_usec()
+	if empty_control or sheep_count not in [80, 1000] or seed_value != 42:
+		_fail_fixture("Fixed forage cohort requires migration, total80/1000 and seed42")
+	else:
+		_fixed_cohort = ProductionForageCohort.new()
+		_fixed_cohort.prepare(sheep_count, seed_value)
+		var error: String = _fixed_cohort.placement_error(_world)
+		if not error.is_empty():
+			_fail_fixture(error)
+		else:
+			for position: Vector2 in _fixed_cohort.requested_positions:
+				_world.queue_place(SimTypes.Species.SHEEP, position)
+	observer_usec += Time.get_ticks_usec() - started
+
+func _fail_fixture(reason: String) -> void:
+	_fixture_error = reason
+	finished = true
 
 func before_step(world: SimulationWorld) -> void:
 	if finished or world.tick != DROUGHT_REQUEST_TICK:
@@ -45,6 +70,10 @@ func before_step(world: SimulationWorld) -> void:
 	observer_usec += Time.get_ticks_usec() - started
 
 func _deplete_declared_region() -> void:
+	if _fixed_cohort != null:
+		_dry_region = ProductionForageCohort.DRY_REGION
+		_consume_dry_region()
+		return
 	var lower: Vector2 = _world.config.world_size
 	var upper := Vector2.ZERO
 	for record: ProductionForageTrace in _records:
@@ -60,6 +89,9 @@ func _deplete_declared_region() -> void:
 	_dry_region = Rect2(lower, upper - lower)
 	if empty_control:
 		_dry_region = Rect2(Vector2.ZERO, _world.config.world_size)
+	_consume_dry_region()
+
+func _consume_dry_region() -> void:
 	for cell: int in _world.resources.cell_count:
 		if not _dry_region.has_point(_world.resources.cell_center(cell)):
 			continue
@@ -73,14 +105,19 @@ func observe_step_start(world: SimulationWorld) -> void:
 		return
 	var started: int = Time.get_ticks_usec()
 	if _records.is_empty():
-		for dense: int in world.store.count:
-			var record := ProductionForageTrace.new()
-			record.handle = world.store.handle_at(dense)
-			record.diagnostics.detailed = _records.size() < ProductionForageDiagnostics.MAX_DETAILED_LIVES
-			_records.append(record)
-		assert(_records.size() == _sheep_count)
+		_register_records(world)
+	if not finished and _fixed_cohort != null:
+		var error: String = _fixed_cohort.observe_intrusions(world, _started_usec)
+		if not error.is_empty():
+			_fail_fixture(error)
+	if finished:
+		observer_usec += Time.get_ticks_usec() - started
+		return
 	for record: ProductionForageTrace in _records:
 		var dense: int = world.store.resolve(record.handle)
+		if _fixed_cohort != null and (dense < 0 or not world.store.is_active(record.handle)):
+			_fail_fixture("A declared cohort life became inactive or invalid")
+			break
 		assert(dense >= 0, "No removal or predator belongs to the forage protocol")
 		record.previous_position = world.store.position_current[dense]
 		record.previous_hunger = world.store.hunger[dense]
@@ -89,6 +126,24 @@ func observe_step_start(world: SimulationWorld) -> void:
 		_observe_food_opportunity(record)
 		record.diagnostics.begin_step(world, record)
 	observer_usec += Time.get_ticks_usec() - started
+
+func _register_records(world: SimulationWorld) -> void:
+	var handles: Array[AgentHandle] = []
+	if _fixed_cohort != null:
+		var error: String = _fixed_cohort.register_lives(world)
+		if not error.is_empty():
+			_fail_fixture(error)
+			return
+		handles.assign(_fixed_cohort.cohort_handles)
+	else:
+		for dense: int in world.store.count:
+			handles.append(world.store.handle_at(dense))
+		assert(handles.size() == _sheep_count)
+	for actor: AgentHandle in handles:
+		var record := ProductionForageTrace.new()
+		record.handle = actor
+		record.diagnostics.detailed = _records.size() < ProductionForageDiagnostics.MAX_DETAILED_LIVES
+		_records.append(record)
 
 func _observe_food_opportunity(record: ProductionForageTrace) -> void:
 	var resources: ResourceGrid = _world.resources
@@ -136,9 +191,13 @@ func after_step(world: SimulationWorld) -> void:
 				"grazing_committed": context.grazing_committed, "alive": true}
 	if world.tick % 60 == 0:
 		_sample_quality(tick)
+		if _fixed_cohort != null:
+			var error: String = _fixed_cohort.sample_background(world, _started_usec)
+			if not error.is_empty():
+				_fail_fixture(error)
 	observed_steps += 1
 	observer_usec += Time.get_ticks_usec() - started
-	finished = world.tick >= END_TICK
+	finished = finished or world.tick >= END_TICK
 
 func _observe_migration(record: ProductionForageTrace, context: AgentContext, intent: MotionIntent, position: Vector2, hunger: float, tick: int) -> void:
 	var displacement: Vector2 = position - record.previous_position
@@ -196,6 +255,11 @@ func _sample_quality(tick: int) -> void:
 
 func finish_report() -> Dictionary:
 	assert(finished)
+	var protocol: String = ProductionForageCohort.VERSION if layout == ProductionForageCohort.Layout.FIXED_COHORT80 else "production-forage-migration-v1"
+	var report: Dictionary = report_header(_world, protocol, _seed, _sheep_count, _started_usec)
+	if not _fixture_error.is_empty():
+		report.merge({"fixture_valid": false, "fixture_error": _fixture_error, "layout": "fixed-cohort80"})
+		return report
 	var records: Array[Dictionary] = []
 	var terminal: Array[Dictionary] = []
 	var first_intake: Array[Dictionary] = []
@@ -228,7 +292,6 @@ func finish_report() -> Dictionary:
 		outcome["migration_completed"] += int(row["migration_completed"])
 		outcome["eligible_without_search"] += int(record.search_tick < 0)
 		outcome["eligible_without_intake"] += int(record.eating_tick < 0)
-	var report: Dictionary = report_header(_world, "production-forage-migration-v1", _seed, _sheep_count, _started_usec)
 	report.merge({"case": outcome["case"], "outcomes": [outcome], "records": records, "terminal": terminal,
 		"quality": _quality.duplicate(true), "first_intake": first_intake, "empty_control": empty_control,
 		"forage_diagnostics_version": "forage-resource-evidence-v1",
@@ -242,4 +305,8 @@ func finish_report() -> Dictionary:
 		"eligibility": "At post-stage0 n>=241: real hunger>=hungry_threshold or feeding commitment; underfoot coverage below MIN_GRAZABLE_AMOUNT and ordinary local best_neighbor has no eligible grass. No forced hunger, intent or task. Never-eligible lives remain explicit.",
 		"migration_evidence": "Owned SEARCH plus >=1px real forward projection; actual body center leaves the depleted region and net displacement reaches one body diameter; later owned GRAZE inside its resource cell reduces hunger below the metabolic prediction by >2e-7. The latter is derived stomach intake, independently accompanied by InteractionSystem grass consumption. SEARCH alone is not a successful migration.",
 		"scope": "Normal sheep trees and 6ms worker; no predators. Resource depletion is a declared external experiment at an owner-thread safe boundary. Empty control intentionally has no reachable food: exploration is measurable, absent intake is not classified as a failed reachable goal. Limited food supply and finite horizon are retained, not compensated."})
+	if _fixed_cohort != null:
+		report.merge(_fixed_cohort.report())
+		report["fixture_valid"] = true
+		report["fixed_cohort_scope"] = "Only the original80 full lives enter migration denominators. Actual background AI/motion/consumption remain enabled. Fixed geometry removes the former drought-size confound; ecology, scheduling and measured extra observer cost remain. World grass-consumption total includes background; per-cohort stomach evidence must not be called exact background intake by subtraction."
 	return report
