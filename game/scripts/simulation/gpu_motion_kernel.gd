@@ -65,8 +65,10 @@ var _identity_directions := PackedVector2Array()
 var _cached_store: AgentStore
 var _cached_life_revision: int = -1
 var _cached_epoch: int = -1
-# Private dense projections are valid only under the bound store lifecycle.
-# They never leave this kernel or retain a MotionIntent/publication reference.
+# Private dense projections are invalidated in three layers: store/lifecycle
+# in _refresh_lifecycle_projection, intent source/time at _pack_bulk entry, and
+# each row's mutation/TTL in the loop. They retain numeric intent fields only;
+# no MotionIntent or publication reference leaves its original owner.
 var _input_handles: Array[AgentHandle] = []
 var _input_life_states := PackedByteArray()
 var _input_versions := PackedInt64Array()
@@ -236,7 +238,7 @@ func run(store: AgentStore, intents: IntentBuffer, field: CrowdMotionField, conf
 ## Only intents and phase decisions need a GDScript row loop. These copies are
 ## synchronous snapshots, not aliases or a second authoritative world state.
 func _pack_bulk(store: AgentStore, intents: IntentBuffer, field: CrowdMotionField, config: SimulationConfig, tick: int) -> PackedByteArray:
-	_refresh_identity_directions(store)
+	_refresh_lifecycle_projection(store)
 	var rows_started: int = Time.get_ticks_usec()
 	if _cached_intents != intents or tick < _last_input_tick:
 		# Live world time is monotonic within an epoch. Explicit rewind also
@@ -301,9 +303,10 @@ func _project_changed_intent(dense: int, intents: IntentBuffer, tick: int, versi
 		_input_retreats[dense] = int(intent.behavior == SimTypes.Behavior.RETREAT)
 	_input_versions[dense] = version
 
-func _refresh_identity_directions(store: AgentStore) -> void:
-	# Dense projection is valid only for this store's complete lifecycle revision.
-	# Swap deletion, slot reuse, reset and held changes all invalidate it.
+func _refresh_lifecycle_projection(store: AgentStore) -> void:
+	# Rebuild every dense-aligned cache together, not just identity directions.
+	# Store identity is required even when two worlds share revision/epoch values.
+	# Swap deletion, slot reuse, reset and held changes invalidate all these rows.
 	if _cached_store == store and _cached_life_revision == store.life_revision and _cached_epoch == store.epoch:
 		return
 	_identity_directions.resize(store.capacity)

@@ -1,0 +1,2333 @@
+{
+  "schema_version": "sheep-animation-manifest/1",
+  "revision": "v3",
+  "date": "2026-10-28",
+  "status": "review_candidate",
+  "canvas_px": [
+    40,
+    40
+  ],
+  "frame_index_base": 0,
+  "directions": [
+    "e",
+    "se",
+    "s",
+    "sw",
+    "w",
+    "nw",
+    "n",
+    "ne"
+  ],
+  "authored_directions": [
+    "e",
+    "se",
+    "s",
+    "n",
+    "ne"
+  ],
+  "mirrored_directions": {
+    "w": "e",
+    "sw": "se",
+    "nw": "ne"
+  },
+  "total_actions": 23,
+  "total_clips": 184,
+  "total_frames": 1328,
+  "source_files": 24,
+  "pixel_filter": "nearest",
+  "color_space": "sRGB",
+  "root_motion": false,
+  "state_contract": {
+    "sheep": "idle/graze → alert → startle → flee → recover → idle/graze; captured holds last frame",
+    "wolf": "stalk requires stalking; feed requires feeding; retreat faces threat while moving backward",
+    "shepherd_dog": "bark/pressure express deterrence; their animation events never directly inflict damage"
+  },
+  "phase_policy": {
+    "actions": [
+      "sheep/idle",
+      "sheep/graze"
+    ],
+    "initial_offset": "stable hash(entity_id, seed, action) % clip_duration_ms",
+    "reset_on_every_frame": false,
+    "non_loop_actions": "start at frame 0 when state is entered"
+  },
+  "event_policy": "frame_index is zero-based; frame_1based is for humans; game logic validates contact",
+  "timing_note": "PNG/source/HTML use exact milliseconds; GIF timing is rounded cumulatively to 10 ms.",
+  "species": [
+    {
+      "id": "sheep",
+      "label": "羊",
+      "palette": {
+        ".": "#00000000",
+        "K": "#293B36",
+        "S": "#49605A",
+        "C": "#DCE0BF",
+        "W": "#FFFBEA"
+      },
+      "pivots_by_direction": {
+        "e": [
+          20,
+          34
+        ],
+        "se": [
+          20,
+          34
+        ],
+        "s": [
+          20,
+          34
+        ],
+        "sw": [
+          19,
+          34
+        ],
+        "w": [
+          19,
+          34
+        ],
+        "nw": [
+          19,
+          34
+        ],
+        "n": [
+          20,
+          34
+        ],
+        "ne": [
+          20,
+          34
+        ]
+      },
+      "notes": [
+        "每方向58帧；五个基础视角分别构造头部可见面及四足布局，其余三个由水平像素镜像获得。",
+        "北向不显示面部眼睛；南向使用居中正脸，斜向拥有独立头部与耳朵轮廓。",
+        "原地动画：脚底pivot固定，真实位移、受惊触发、捕获判定与草量消耗由游戏状态驱动。",
+        "待机与觅食建议按实体稳定随机种子错开播放相位，不能全群同时从第1帧开始。",
+        "起跑末帧匹配逃跑首帧，恢复末帧匹配待机首帧；捕获末帧保持，不自动回到待机。",
+        "被捕获使用无血腥的屈腿、侧倒、闭眼与停止主动运动表达失去行动能力。"
+      ],
+      "sources": {
+        "e": "source/sheep_e.aseprite",
+        "se": "source/sheep_se.aseprite",
+        "s": "source/sheep_s.aseprite",
+        "sw": "source/sheep_sw.aseprite",
+        "w": "source/sheep_w.aseprite",
+        "nw": "source/sheep_nw.aseprite",
+        "n": "source/sheep_n.aseprite",
+        "ne": "source/sheep_ne.aseprite"
+      },
+      "actions": [
+        {
+          "id": "idle",
+          "label": "待机",
+          "loop": true,
+          "events": [],
+          "user_frame_budget": 8,
+          "default_exit": "loop",
+          "suggested_state": "idle",
+          "phase_randomization": true,
+          "frame_count": 8,
+          "durations_ms": [
+            170,
+            170,
+            170,
+            170,
+            170,
+            170,
+            170,
+            170
+          ],
+          "phases": [
+            "呼吸起点",
+            "吸气",
+            "轻抬重心",
+            "呼吸高点",
+            "眨眼",
+            "呼气",
+            "耳朵轻转",
+            "回到平静"
+          ],
+          "duration_ms": 1360,
+          "sheets": {
+            "e": "sheets/sheep/idle_e.png",
+            "se": "sheets/sheep/idle_se.png",
+            "s": "sheets/sheep/idle_s.png",
+            "sw": "sheets/sheep/idle_sw.png",
+            "w": "sheets/sheep/idle_w.png",
+            "nw": "sheets/sheep/idle_nw.png",
+            "n": "sheets/sheep/idle_n.png",
+            "ne": "sheets/sheep/idle_ne.png"
+          },
+          "png_pattern": "png/sheep/idle/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ],
+            [
+              160,
+              0,
+              40,
+              40
+            ],
+            [
+              200,
+              0,
+              40,
+              40
+            ],
+            [
+              240,
+              0,
+              40,
+              40
+            ],
+            [
+              280,
+              0,
+              40,
+              40
+            ]
+          ]
+        },
+        {
+          "id": "walk",
+          "label": "行走",
+          "loop": true,
+          "events": [],
+          "user_frame_budget": 8,
+          "default_exit": "loop",
+          "suggested_state": "walk",
+          "phase_randomization": false,
+          "frame_count": 8,
+          "durations_ms": [
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            100
+          ],
+          "phases": [
+            "短步循环 1/8：交替支撑与摆腿",
+            "短步循环 2/8：交替支撑与摆腿",
+            "短步循环 3/8：交替支撑与摆腿",
+            "短步循环 4/8：交替支撑与摆腿",
+            "短步循环 5/8：交替支撑与摆腿",
+            "短步循环 6/8：交替支撑与摆腿",
+            "短步循环 7/8：交替支撑与摆腿",
+            "短步循环 8/8：交替支撑与摆腿"
+          ],
+          "duration_ms": 800,
+          "sheets": {
+            "e": "sheets/sheep/walk_e.png",
+            "se": "sheets/sheep/walk_se.png",
+            "s": "sheets/sheep/walk_s.png",
+            "sw": "sheets/sheep/walk_sw.png",
+            "w": "sheets/sheep/walk_w.png",
+            "nw": "sheets/sheep/walk_nw.png",
+            "n": "sheets/sheep/walk_n.png",
+            "ne": "sheets/sheep/walk_ne.png"
+          },
+          "png_pattern": "png/sheep/walk/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ],
+            [
+              160,
+              0,
+              40,
+              40
+            ],
+            [
+              200,
+              0,
+              40,
+              40
+            ],
+            [
+              240,
+              0,
+              40,
+              40
+            ],
+            [
+              280,
+              0,
+              40,
+              40
+            ]
+          ]
+        },
+        {
+          "id": "graze",
+          "label": "觅食",
+          "loop": true,
+          "events": [
+            {
+              "frame_1based": 3,
+              "name": "graze_contact_suggested",
+              "note": "建议接触帧；实际草量扣减由行为逻辑决定。",
+              "frame_index": 2
+            }
+          ],
+          "user_frame_budget": 12,
+          "default_exit": "loop",
+          "suggested_state": "graze",
+          "phase_randomization": true,
+          "frame_count": 12,
+          "durations_ms": [
+            125,
+            125,
+            125,
+            125,
+            125,
+            125,
+            125,
+            125,
+            125,
+            125,
+            125,
+            125
+          ],
+          "phases": [
+            "低头",
+            "继续靠近地面",
+            "接触草地",
+            "咀嚼",
+            "咀嚼张口",
+            "咀嚼闭口",
+            "小步挪动",
+            "持续咀嚼",
+            "收回短步",
+            "咀嚼结束",
+            "轻抬头",
+            "返回低头起点"
+          ],
+          "duration_ms": 1500,
+          "sheets": {
+            "e": "sheets/sheep/graze_e.png",
+            "se": "sheets/sheep/graze_se.png",
+            "s": "sheets/sheep/graze_s.png",
+            "sw": "sheets/sheep/graze_sw.png",
+            "w": "sheets/sheep/graze_w.png",
+            "nw": "sheets/sheep/graze_nw.png",
+            "n": "sheets/sheep/graze_n.png",
+            "ne": "sheets/sheep/graze_ne.png"
+          },
+          "png_pattern": "png/sheep/graze/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ],
+            [
+              160,
+              0,
+              40,
+              40
+            ],
+            [
+              200,
+              0,
+              40,
+              40
+            ],
+            [
+              240,
+              0,
+              40,
+              40
+            ],
+            [
+              280,
+              0,
+              40,
+              40
+            ],
+            [
+              320,
+              0,
+              40,
+              40
+            ],
+            [
+              360,
+              0,
+              40,
+              40
+            ],
+            [
+              400,
+              0,
+              40,
+              40
+            ],
+            [
+              440,
+              0,
+              40,
+              40
+            ]
+          ]
+        },
+        {
+          "id": "alert",
+          "label": "警觉",
+          "loop": false,
+          "events": [],
+          "user_frame_budget": 4,
+          "default_exit": "hold_last",
+          "suggested_state": "alert",
+          "phase_randomization": false,
+          "frame_count": 4,
+          "durations_ms": [
+            70,
+            70,
+            90,
+            180
+          ],
+          "phases": [
+            "中断平静动作",
+            "突然抬头",
+            "耳朵竖起，身体绷紧",
+            "保持威胁关注"
+          ],
+          "duration_ms": 410,
+          "sheets": {
+            "e": "sheets/sheep/alert_e.png",
+            "se": "sheets/sheep/alert_se.png",
+            "s": "sheets/sheep/alert_s.png",
+            "sw": "sheets/sheep/alert_sw.png",
+            "w": "sheets/sheep/alert_w.png",
+            "nw": "sheets/sheep/alert_nw.png",
+            "n": "sheets/sheep/alert_n.png",
+            "ne": "sheets/sheep/alert_ne.png"
+          },
+          "png_pattern": "png/sheep/alert/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ]
+          ]
+        },
+        {
+          "id": "startle",
+          "label": "受惊起跑",
+          "loop": false,
+          "events": [
+            {
+              "frame_1based": 3,
+              "name": "push_off",
+              "frame_index": 2
+            },
+            {
+              "frame_1based": 4,
+              "name": "ready_for_flee_frame_1",
+              "frame_index": 3
+            }
+          ],
+          "user_frame_budget": 4,
+          "default_exit": "hold_last",
+          "suggested_state": "startle",
+          "phase_randomization": false,
+          "frame_count": 4,
+          "durations_ms": [
+            70,
+            90,
+            70,
+            65
+          ],
+          "phases": [
+            "压低身体",
+            "后腿蓄力",
+            "后腿蹬地",
+            "接入逃跑首帧"
+          ],
+          "duration_ms": 295,
+          "sheets": {
+            "e": "sheets/sheep/startle_e.png",
+            "se": "sheets/sheep/startle_se.png",
+            "s": "sheets/sheep/startle_s.png",
+            "sw": "sheets/sheep/startle_sw.png",
+            "w": "sheets/sheep/startle_w.png",
+            "nw": "sheets/sheep/startle_nw.png",
+            "n": "sheets/sheep/startle_n.png",
+            "ne": "sheets/sheep/startle_ne.png"
+          },
+          "png_pattern": "png/sheep/startle/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ]
+          ]
+        },
+        {
+          "id": "flee",
+          "label": "逃跑",
+          "loop": true,
+          "events": [],
+          "user_frame_budget": 8,
+          "default_exit": "loop",
+          "suggested_state": "flee",
+          "phase_randomization": false,
+          "frame_count": 8,
+          "durations_ms": [
+            65,
+            65,
+            65,
+            65,
+            65,
+            65,
+            65,
+            65
+          ],
+          "phases": [
+            "离地展开",
+            "前后伸展",
+            "前脚准备落地",
+            "落地缓冲",
+            "后脚支撑",
+            "再次腾空",
+            "收腿换步",
+            "回弹准备"
+          ],
+          "duration_ms": 520,
+          "sheets": {
+            "e": "sheets/sheep/flee_e.png",
+            "se": "sheets/sheep/flee_se.png",
+            "s": "sheets/sheep/flee_s.png",
+            "sw": "sheets/sheep/flee_sw.png",
+            "w": "sheets/sheep/flee_w.png",
+            "nw": "sheets/sheep/flee_nw.png",
+            "n": "sheets/sheep/flee_n.png",
+            "ne": "sheets/sheep/flee_ne.png"
+          },
+          "png_pattern": "png/sheep/flee/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ],
+            [
+              160,
+              0,
+              40,
+              40
+            ],
+            [
+              200,
+              0,
+              40,
+              40
+            ],
+            [
+              240,
+              0,
+              40,
+              40
+            ],
+            [
+              280,
+              0,
+              40,
+              40
+            ]
+          ]
+        },
+        {
+          "id": "recover",
+          "label": "恢复平静",
+          "loop": false,
+          "events": [],
+          "user_frame_budget": 6,
+          "default_exit": "hold_last",
+          "suggested_state": "recover",
+          "phase_randomization": false,
+          "frame_count": 6,
+          "durations_ms": [
+            90,
+            110,
+            140,
+            150,
+            170,
+            170
+          ],
+          "phases": [
+            "减速落步",
+            "收回步幅",
+            "回望确认安全",
+            "再观察前方",
+            "呼气放松",
+            "恢复待机起点"
+          ],
+          "duration_ms": 830,
+          "sheets": {
+            "e": "sheets/sheep/recover_e.png",
+            "se": "sheets/sheep/recover_se.png",
+            "s": "sheets/sheep/recover_s.png",
+            "sw": "sheets/sheep/recover_sw.png",
+            "w": "sheets/sheep/recover_w.png",
+            "nw": "sheets/sheep/recover_nw.png",
+            "n": "sheets/sheep/recover_n.png",
+            "ne": "sheets/sheep/recover_ne.png"
+          },
+          "png_pattern": "png/sheep/recover/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ],
+            [
+              160,
+              0,
+              40,
+              40
+            ],
+            [
+              200,
+              0,
+              40,
+              40
+            ]
+          ]
+        },
+        {
+          "id": "captured",
+          "label": "被捕获",
+          "loop": false,
+          "events": [
+            {
+              "frame_1based": 1,
+              "name": "locomotion_locked",
+              "frame_index": 0
+            },
+            {
+              "frame_1based": 5,
+              "name": "ground_contact",
+              "frame_index": 4
+            },
+            {
+              "frame_1based": 8,
+              "name": "hold_last_pose",
+              "frame_index": 7
+            }
+          ],
+          "user_frame_budget": 8,
+          "default_exit": "hold_last",
+          "suggested_state": "captured",
+          "phase_randomization": false,
+          "frame_count": 8,
+          "durations_ms": [
+            70,
+            80,
+            90,
+            100,
+            110,
+            120,
+            150,
+            400
+          ],
+          "phases": [
+            "被制住，停止前进",
+            "失衡屈腿",
+            "失去支撑",
+            "倒向侧面",
+            "侧身落地",
+            "轻微落地回弹",
+            "闭眼停止主动动作",
+            "失去行动能力，保持末帧"
+          ],
+          "duration_ms": 1120,
+          "sheets": {
+            "e": "sheets/sheep/captured_e.png",
+            "se": "sheets/sheep/captured_se.png",
+            "s": "sheets/sheep/captured_s.png",
+            "sw": "sheets/sheep/captured_sw.png",
+            "w": "sheets/sheep/captured_w.png",
+            "nw": "sheets/sheep/captured_nw.png",
+            "n": "sheets/sheep/captured_n.png",
+            "ne": "sheets/sheep/captured_ne.png"
+          },
+          "png_pattern": "png/sheep/captured/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ],
+            [
+              160,
+              0,
+              40,
+              40
+            ],
+            [
+              200,
+              0,
+              40,
+              40
+            ],
+            [
+              240,
+              0,
+              40,
+              40
+            ],
+            [
+              280,
+              0,
+              40,
+              40
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "wolf",
+      "label": "狼",
+      "palette": {
+        ".": "#00000000",
+        "K": "#27363F",
+        "D": "#596E7C",
+        "G": "#8798A4",
+        "H": "#BFCFD0",
+        "W": "#F1EFE3",
+        "E": "#F4B65B"
+      },
+      "pivots_by_direction": {
+        "e": [
+          20,
+          34
+        ],
+        "se": [
+          20,
+          34
+        ],
+        "s": [
+          20,
+          34
+        ],
+        "sw": [
+          19,
+          34
+        ],
+        "w": [
+          19,
+          34
+        ],
+        "nw": [
+          19,
+          34
+        ],
+        "n": [
+          20,
+          34
+        ],
+        "ne": [
+          20,
+          34
+        ]
+      },
+      "notes": [
+        "重画为宽基底三角尖耳、低颈长吻、白色腹部与下颌、金色凶狠眼神；不沿用V2驴状轮廓。",
+        "5个基础视角独立构图，西/西南/西北由对称方向镜像。",
+        "后撤动画面朝威胁，移动方向相反；低姿接近及进食必须绑定实际行为状态。",
+        "没有全局位移root motion；所有攻击接触帧只是接入建议。"
+      ],
+      "sources": {
+        "e": "source/wolf_e.aseprite",
+        "se": "source/wolf_se.aseprite",
+        "s": "source/wolf_s.aseprite",
+        "sw": "source/wolf_sw.aseprite",
+        "w": "source/wolf_w.aseprite",
+        "nw": "source/wolf_nw.aseprite",
+        "n": "source/wolf_n.aseprite",
+        "ne": "source/wolf_ne.aseprite"
+      },
+      "actions": [
+        {
+          "id": "observe",
+          "label": "待机观察",
+          "loop": true,
+          "events": [],
+          "required_state": "observe",
+          "motion_policy": "in_place; world velocity controlled externally",
+          "movement_relative_to_facing": "none",
+          "end_policy": "loop",
+          "frame_count": 8,
+          "durations_ms": [
+            160,
+            160,
+            160,
+            160,
+            160,
+            160,
+            160,
+            160
+          ],
+          "phases": [
+            "呼吸与耳部观察姿态",
+            "呼吸与耳部观察姿态",
+            "呼吸与耳部观察姿态",
+            "呼吸与耳部观察姿态",
+            "呼吸与耳部观察姿态",
+            "呼吸与耳部观察姿态",
+            "呼吸与耳部观察姿态",
+            "呼吸与耳部观察姿态"
+          ],
+          "duration_ms": 1280,
+          "sheets": {
+            "e": "sheets/wolf/observe_e.png",
+            "se": "sheets/wolf/observe_se.png",
+            "s": "sheets/wolf/observe_s.png",
+            "sw": "sheets/wolf/observe_sw.png",
+            "w": "sheets/wolf/observe_w.png",
+            "nw": "sheets/wolf/observe_nw.png",
+            "n": "sheets/wolf/observe_n.png",
+            "ne": "sheets/wolf/observe_ne.png"
+          },
+          "png_pattern": "png/wolf/observe/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ],
+            [
+              160,
+              0,
+              40,
+              40
+            ],
+            [
+              200,
+              0,
+              40,
+              40
+            ],
+            [
+              240,
+              0,
+              40,
+              40
+            ],
+            [
+              280,
+              0,
+              40,
+              40
+            ]
+          ]
+        },
+        {
+          "id": "search",
+          "label": "行走搜索",
+          "loop": true,
+          "events": [],
+          "required_state": "search",
+          "motion_policy": "in_place; world velocity controlled externally",
+          "movement_relative_to_facing": "forward",
+          "end_policy": "loop",
+          "frame_count": 8,
+          "durations_ms": [
+            110,
+            110,
+            110,
+            110,
+            110,
+            110,
+            110,
+            110
+          ],
+          "phases": [
+            "从容交替接地搜索",
+            "从容交替接地搜索",
+            "从容交替接地搜索",
+            "从容交替接地搜索",
+            "从容交替接地搜索",
+            "从容交替接地搜索",
+            "从容交替接地搜索",
+            "从容交替接地搜索"
+          ],
+          "duration_ms": 880,
+          "sheets": {
+            "e": "sheets/wolf/search_e.png",
+            "se": "sheets/wolf/search_se.png",
+            "s": "sheets/wolf/search_s.png",
+            "sw": "sheets/wolf/search_sw.png",
+            "w": "sheets/wolf/search_w.png",
+            "nw": "sheets/wolf/search_nw.png",
+            "n": "sheets/wolf/search_n.png",
+            "ne": "sheets/wolf/search_ne.png"
+          },
+          "png_pattern": "png/wolf/search/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ],
+            [
+              160,
+              0,
+              40,
+              40
+            ],
+            [
+              200,
+              0,
+              40,
+              40
+            ],
+            [
+              240,
+              0,
+              40,
+              40
+            ],
+            [
+              280,
+              0,
+              40,
+              40
+            ]
+          ]
+        },
+        {
+          "id": "stalk",
+          "label": "低姿接近",
+          "loop": true,
+          "events": [],
+          "required_state": "stalking",
+          "motion_policy": "in_place; world velocity controlled externally",
+          "movement_relative_to_facing": "forward",
+          "end_policy": "loop",
+          "frame_count": 8,
+          "durations_ms": [
+            135,
+            135,
+            135,
+            135,
+            135,
+            135,
+            135,
+            135
+          ],
+          "phases": [
+            "低姿收步，注视猎物",
+            "低姿收步，注视猎物",
+            "低姿收步，注视猎物",
+            "低姿收步，注视猎物",
+            "低姿收步，注视猎物",
+            "低姿收步，注视猎物",
+            "低姿收步，注视猎物",
+            "低姿收步，注视猎物"
+          ],
+          "duration_ms": 1080,
+          "sheets": {
+            "e": "sheets/wolf/stalk_e.png",
+            "se": "sheets/wolf/stalk_se.png",
+            "s": "sheets/wolf/stalk_s.png",
+            "sw": "sheets/wolf/stalk_sw.png",
+            "w": "sheets/wolf/stalk_w.png",
+            "nw": "sheets/wolf/stalk_nw.png",
+            "n": "sheets/wolf/stalk_n.png",
+            "ne": "sheets/wolf/stalk_ne.png"
+          },
+          "png_pattern": "png/wolf/stalk/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ],
+            [
+              160,
+              0,
+              40,
+              40
+            ],
+            [
+              200,
+              0,
+              40,
+              40
+            ],
+            [
+              240,
+              0,
+              40,
+              40
+            ],
+            [
+              280,
+              0,
+              40,
+              40
+            ]
+          ]
+        },
+        {
+          "id": "chase",
+          "label": "追逐奔跑",
+          "loop": true,
+          "events": [],
+          "required_state": "chase",
+          "motion_policy": "in_place; world velocity controlled externally",
+          "movement_relative_to_facing": "forward",
+          "end_policy": "loop",
+          "frame_count": 8,
+          "durations_ms": [
+            75,
+            75,
+            75,
+            75,
+            75,
+            75,
+            75,
+            75
+          ],
+          "phases": [
+            "伸展、腾空、收腿、落地追逐循环",
+            "伸展、腾空、收腿、落地追逐循环",
+            "伸展、腾空、收腿、落地追逐循环",
+            "伸展、腾空、收腿、落地追逐循环",
+            "伸展、腾空、收腿、落地追逐循环",
+            "伸展、腾空、收腿、落地追逐循环",
+            "伸展、腾空、收腿、落地追逐循环",
+            "伸展、腾空、收腿、落地追逐循环"
+          ],
+          "duration_ms": 600,
+          "sheets": {
+            "e": "sheets/wolf/chase_e.png",
+            "se": "sheets/wolf/chase_se.png",
+            "s": "sheets/wolf/chase_s.png",
+            "sw": "sheets/wolf/chase_sw.png",
+            "w": "sheets/wolf/chase_w.png",
+            "nw": "sheets/wolf/chase_nw.png",
+            "n": "sheets/wolf/chase_n.png",
+            "ne": "sheets/wolf/chase_ne.png"
+          },
+          "png_pattern": "png/wolf/chase/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ],
+            [
+              160,
+              0,
+              40,
+              40
+            ],
+            [
+              200,
+              0,
+              40,
+              40
+            ],
+            [
+              240,
+              0,
+              40,
+              40
+            ],
+            [
+              280,
+              0,
+              40,
+              40
+            ]
+          ]
+        },
+        {
+          "id": "pounce",
+          "label": "扑击",
+          "loop": false,
+          "events": [
+            {
+              "frame_1based": 5,
+              "name": "landing_contact_suggestion",
+              "description": "落地接触建议帧；实际命中由游戏逻辑判定。",
+              "frame_index": 4
+            }
+          ],
+          "required_state": "pounce",
+          "motion_policy": "in_place; world velocity controlled externally",
+          "movement_relative_to_facing": "none",
+          "end_policy": "hold_last_then_state_transition",
+          "frame_count": 6,
+          "durations_ms": [
+            100,
+            100,
+            85,
+            85,
+            110,
+            130
+          ],
+          "phases": [
+            "蓄力",
+            "压缩",
+            "前扑腾空",
+            "前肢伸出",
+            "落地接触",
+            "收势"
+          ],
+          "duration_ms": 610,
+          "sheets": {
+            "e": "sheets/wolf/pounce_e.png",
+            "se": "sheets/wolf/pounce_se.png",
+            "s": "sheets/wolf/pounce_s.png",
+            "sw": "sheets/wolf/pounce_sw.png",
+            "w": "sheets/wolf/pounce_w.png",
+            "nw": "sheets/wolf/pounce_nw.png",
+            "n": "sheets/wolf/pounce_n.png",
+            "ne": "sheets/wolf/pounce_ne.png"
+          },
+          "png_pattern": "png/wolf/pounce/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ],
+            [
+              160,
+              0,
+              40,
+              40
+            ],
+            [
+              200,
+              0,
+              40,
+              40
+            ]
+          ]
+        },
+        {
+          "id": "bite",
+          "label": "咬合",
+          "loop": false,
+          "events": [
+            {
+              "frame_1based": 4,
+              "name": "bite_contact_suggestion",
+              "description": "闭颌接触建议帧；不能仅凭动画帧自动造成伤害。",
+              "frame_index": 3
+            }
+          ],
+          "required_state": "bite",
+          "motion_policy": "in_place; world velocity controlled externally",
+          "movement_relative_to_facing": "none",
+          "end_policy": "hold_last_then_state_transition",
+          "frame_count": 6,
+          "durations_ms": [
+            110,
+            90,
+            80,
+            90,
+            100,
+            140
+          ],
+          "phases": [
+            "锁定",
+            "张颌",
+            "头颈前送",
+            "闭颌建议接触",
+            "保持",
+            "收回"
+          ],
+          "duration_ms": 610,
+          "sheets": {
+            "e": "sheets/wolf/bite_e.png",
+            "se": "sheets/wolf/bite_se.png",
+            "s": "sheets/wolf/bite_s.png",
+            "sw": "sheets/wolf/bite_sw.png",
+            "w": "sheets/wolf/bite_w.png",
+            "nw": "sheets/wolf/bite_nw.png",
+            "n": "sheets/wolf/bite_n.png",
+            "ne": "sheets/wolf/bite_ne.png"
+          },
+          "png_pattern": "png/wolf/bite/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ],
+            [
+              160,
+              0,
+              40,
+              40
+            ],
+            [
+              200,
+              0,
+              40,
+              40
+            ]
+          ]
+        },
+        {
+          "id": "retreat",
+          "label": "受驱赶后撤",
+          "loop": true,
+          "events": [],
+          "required_state": "repelled",
+          "motion_policy": "in_place; world velocity controlled externally",
+          "movement_relative_to_facing": "backward",
+          "end_policy": "loop",
+          "frame_count": 8,
+          "durations_ms": [
+            115,
+            115,
+            115,
+            115,
+            115,
+            115,
+            115,
+            115
+          ],
+          "phases": [
+            "身体反向退步，头部仍朝威胁方向",
+            "身体反向退步，头部仍朝威胁方向",
+            "身体反向退步，头部仍朝威胁方向",
+            "身体反向退步，头部仍朝威胁方向",
+            "身体反向退步，头部仍朝威胁方向",
+            "身体反向退步，头部仍朝威胁方向",
+            "身体反向退步，头部仍朝威胁方向",
+            "身体反向退步，头部仍朝威胁方向"
+          ],
+          "duration_ms": 920,
+          "sheets": {
+            "e": "sheets/wolf/retreat_e.png",
+            "se": "sheets/wolf/retreat_se.png",
+            "s": "sheets/wolf/retreat_s.png",
+            "sw": "sheets/wolf/retreat_sw.png",
+            "w": "sheets/wolf/retreat_w.png",
+            "nw": "sheets/wolf/retreat_nw.png",
+            "n": "sheets/wolf/retreat_n.png",
+            "ne": "sheets/wolf/retreat_ne.png"
+          },
+          "png_pattern": "png/wolf/retreat/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ],
+            [
+              160,
+              0,
+              40,
+              40
+            ],
+            [
+              200,
+              0,
+              40,
+              40
+            ],
+            [
+              240,
+              0,
+              40,
+              40
+            ],
+            [
+              280,
+              0,
+              40,
+              40
+            ]
+          ]
+        },
+        {
+          "id": "feed",
+          "label": "捕食后进食",
+          "loop": true,
+          "events": [],
+          "required_state": "feeding",
+          "motion_policy": "in_place; world velocity controlled externally",
+          "movement_relative_to_facing": "none",
+          "end_policy": "loop",
+          "frame_count": 8,
+          "durations_ms": [
+            150,
+            150,
+            150,
+            150,
+            150,
+            150,
+            150,
+            150
+          ],
+          "phases": [
+            "低头进食与咀嚼；仅在捕食后进食状态使用",
+            "低头进食与咀嚼；仅在捕食后进食状态使用",
+            "低头进食与咀嚼；仅在捕食后进食状态使用",
+            "低头进食与咀嚼；仅在捕食后进食状态使用",
+            "低头进食与咀嚼；仅在捕食后进食状态使用",
+            "低头进食与咀嚼；仅在捕食后进食状态使用",
+            "低头进食与咀嚼；仅在捕食后进食状态使用",
+            "低头进食与咀嚼；仅在捕食后进食状态使用"
+          ],
+          "duration_ms": 1200,
+          "sheets": {
+            "e": "sheets/wolf/feed_e.png",
+            "se": "sheets/wolf/feed_se.png",
+            "s": "sheets/wolf/feed_s.png",
+            "sw": "sheets/wolf/feed_sw.png",
+            "w": "sheets/wolf/feed_w.png",
+            "nw": "sheets/wolf/feed_nw.png",
+            "n": "sheets/wolf/feed_n.png",
+            "ne": "sheets/wolf/feed_ne.png"
+          },
+          "png_pattern": "png/wolf/feed/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ],
+            [
+              160,
+              0,
+              40,
+              40
+            ],
+            [
+              200,
+              0,
+              40,
+              40
+            ],
+            [
+              240,
+              0,
+              40,
+              40
+            ],
+            [
+              280,
+              0,
+              40,
+              40
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "shepherd_dog",
+      "label": "牧羊犬",
+      "palette": {
+        ".": "#00000000",
+        "K": "#293B36",
+        "D": "#8A5935",
+        "B": "#C58B43",
+        "Y": "#F0C36B",
+        "U": "#2E83C2",
+        "L": "#78C9E6"
+      },
+      "pivots_by_direction": {
+        "e": [
+          20,
+          34
+        ],
+        "se": [
+          20,
+          34
+        ],
+        "s": [
+          20,
+          34
+        ],
+        "sw": [
+          19,
+          34
+        ],
+        "w": [
+          19,
+          34
+        ],
+        "nw": [
+          19,
+          34
+        ],
+        "n": [
+          20,
+          34
+        ],
+        "ne": [
+          20,
+          34
+        ]
+      },
+      "notes": [
+        "48 frames per direction, eight directions; e/se/s/n/ne authored independently, opposite diagonal/side directions mirrored.",
+        "Blue pixels belong only to the neck collar; no harness.",
+        "Seven semantic layers, fixed 40x40 canvas and (20,34) ground anchor before mirroring.",
+        "All animation is in-place; do not use bark or pressure events as automatic damage triggers.",
+        "Frontal/back views have independently drawn heads and limb projection; n has no visible eyes or front muzzle."
+      ],
+      "sources": {
+        "e": "source/shepherd_dog_e.aseprite",
+        "se": "source/shepherd_dog_se.aseprite",
+        "s": "source/shepherd_dog_s.aseprite",
+        "sw": "source/shepherd_dog_sw.aseprite",
+        "w": "source/shepherd_dog_w.aseprite",
+        "nw": "source/shepherd_dog_nw.aseprite",
+        "n": "source/shepherd_dog_n.aseprite",
+        "ne": "source/shepherd_dog_ne.aseprite"
+      },
+      "actions": [
+        {
+          "id": "guard_idle",
+          "label": "守护待机",
+          "loop": true,
+          "events": [],
+          "expected_frames_per_direction": 8,
+          "entry_from": [
+            "relax",
+            "patrol"
+          ],
+          "semantic_state": "guarding",
+          "frame_count": 8,
+          "durations_ms": [
+            150,
+            130,
+            120,
+            150,
+            150,
+            100,
+            130,
+            150
+          ],
+          "phases": [
+            "放松观察",
+            "吸气",
+            "耳朵转向",
+            "小幅扫视",
+            "呼气",
+            "眨眼",
+            "回收视线",
+            "衔接待机"
+          ],
+          "duration_ms": 1080,
+          "sheets": {
+            "e": "sheets/shepherd_dog/guard_idle_e.png",
+            "se": "sheets/shepherd_dog/guard_idle_se.png",
+            "s": "sheets/shepherd_dog/guard_idle_s.png",
+            "sw": "sheets/shepherd_dog/guard_idle_sw.png",
+            "w": "sheets/shepherd_dog/guard_idle_w.png",
+            "nw": "sheets/shepherd_dog/guard_idle_nw.png",
+            "n": "sheets/shepherd_dog/guard_idle_n.png",
+            "ne": "sheets/shepherd_dog/guard_idle_ne.png"
+          },
+          "png_pattern": "png/shepherd_dog/guard_idle/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ],
+            [
+              160,
+              0,
+              40,
+              40
+            ],
+            [
+              200,
+              0,
+              40,
+              40
+            ],
+            [
+              240,
+              0,
+              40,
+              40
+            ],
+            [
+              280,
+              0,
+              40,
+              40
+            ]
+          ]
+        },
+        {
+          "id": "patrol",
+          "label": "巡逻行走",
+          "loop": true,
+          "events": [],
+          "expected_frames_per_direction": 8,
+          "semantic_state": "patrolling",
+          "world_motion": "external velocity; stride is in-place",
+          "frame_count": 8,
+          "durations_ms": [
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            100
+          ],
+          "phases": [
+            "前脚着地",
+            "承重",
+            "后脚前摆",
+            "交换支撑",
+            "对侧着地",
+            "对侧承重",
+            "对侧前摆",
+            "回到着地"
+          ],
+          "duration_ms": 800,
+          "sheets": {
+            "e": "sheets/shepherd_dog/patrol_e.png",
+            "se": "sheets/shepherd_dog/patrol_se.png",
+            "s": "sheets/shepherd_dog/patrol_s.png",
+            "sw": "sheets/shepherd_dog/patrol_sw.png",
+            "w": "sheets/shepherd_dog/patrol_w.png",
+            "nw": "sheets/shepherd_dog/patrol_nw.png",
+            "n": "sheets/shepherd_dog/patrol_n.png",
+            "ne": "sheets/shepherd_dog/patrol_ne.png"
+          },
+          "png_pattern": "png/shepherd_dog/patrol/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ],
+            [
+              160,
+              0,
+              40,
+              40
+            ],
+            [
+              200,
+              0,
+              40,
+              40
+            ],
+            [
+              240,
+              0,
+              40,
+              40
+            ],
+            [
+              280,
+              0,
+              40,
+              40
+            ]
+          ]
+        },
+        {
+          "id": "intercept",
+          "label": "拦截奔跑",
+          "loop": true,
+          "events": [],
+          "expected_frames_per_direction": 8,
+          "semantic_state": "intercepting",
+          "design_note": "Compared with wolf pursuit, dog uses a steadier chest and smaller vertical leap.",
+          "frame_count": 8,
+          "durations_ms": [
+            75,
+            75,
+            75,
+            75,
+            75,
+            75,
+            75,
+            75
+          ],
+          "phases": [
+            "前倾蹬地",
+            "前脚伸出",
+            "短暂腾空",
+            "准备落地",
+            "低身承重",
+            "后腿追上",
+            "再次前送",
+            "接入下一步"
+          ],
+          "duration_ms": 600,
+          "sheets": {
+            "e": "sheets/shepherd_dog/intercept_e.png",
+            "se": "sheets/shepherd_dog/intercept_se.png",
+            "s": "sheets/shepherd_dog/intercept_s.png",
+            "sw": "sheets/shepherd_dog/intercept_sw.png",
+            "w": "sheets/shepherd_dog/intercept_w.png",
+            "nw": "sheets/shepherd_dog/intercept_nw.png",
+            "n": "sheets/shepherd_dog/intercept_n.png",
+            "ne": "sheets/shepherd_dog/intercept_ne.png"
+          },
+          "png_pattern": "png/shepherd_dog/intercept/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ],
+            [
+              160,
+              0,
+              40,
+              40
+            ],
+            [
+              200,
+              0,
+              40,
+              40
+            ],
+            [
+              240,
+              0,
+              40,
+              40
+            ],
+            [
+              280,
+              0,
+              40,
+              40
+            ]
+          ]
+        },
+        {
+          "id": "detect",
+          "label": "发现威胁",
+          "loop": false,
+          "events": [
+            {
+              "frame_1based": 2,
+              "event": "threat_alert_visual",
+              "note": "视觉提示时机，不替代实际感知判定",
+              "frame_index": 1
+            }
+          ],
+          "expected_frames_per_direction": 4,
+          "exit_to": [
+            "intercept",
+            "bark",
+            "pressure"
+          ],
+          "semantic_state": "threat_detected",
+          "frame_count": 4,
+          "durations_ms": [
+            70,
+            70,
+            100,
+            160
+          ],
+          "phases": [
+            "停步压住重心",
+            "快速抬头",
+            "转耳绷紧",
+            "锁定威胁"
+          ],
+          "duration_ms": 400,
+          "sheets": {
+            "e": "sheets/shepherd_dog/detect_e.png",
+            "se": "sheets/shepherd_dog/detect_se.png",
+            "s": "sheets/shepherd_dog/detect_s.png",
+            "sw": "sheets/shepherd_dog/detect_sw.png",
+            "w": "sheets/shepherd_dog/detect_w.png",
+            "nw": "sheets/shepherd_dog/detect_nw.png",
+            "n": "sheets/shepherd_dog/detect_n.png",
+            "ne": "sheets/shepherd_dog/detect_ne.png"
+          },
+          "png_pattern": "png/shepherd_dog/detect/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ]
+          ]
+        },
+        {
+          "id": "bark",
+          "label": "吠叫",
+          "loop": true,
+          "events": [
+            {
+              "frame_1based": 3,
+              "event": "bark_audio",
+              "note": "建议音效帧；头颈前送且嘴部打开",
+              "frame_index": 2
+            },
+            {
+              "frame_1based": 6,
+              "event": "bark_audio",
+              "note": "第二次吠叫峰值",
+              "frame_index": 5
+            }
+          ],
+          "expected_frames_per_direction": 8,
+          "repeatable": true,
+          "semantic_state": "driving_wolf",
+          "damage": false,
+          "frame_count": 8,
+          "durations_ms": [
+            100,
+            90,
+            70,
+            90,
+            90,
+            70,
+            100,
+            150
+          ],
+          "phases": [
+            "压住重心",
+            "胸腔吸气",
+            "第一次有力吠叫",
+            "下颌回收",
+            "再次吸气",
+            "第二次吠叫",
+            "收口呼气",
+            "保持警戒"
+          ],
+          "duration_ms": 760,
+          "sheets": {
+            "e": "sheets/shepherd_dog/bark_e.png",
+            "se": "sheets/shepherd_dog/bark_se.png",
+            "s": "sheets/shepherd_dog/bark_s.png",
+            "sw": "sheets/shepherd_dog/bark_sw.png",
+            "w": "sheets/shepherd_dog/bark_w.png",
+            "nw": "sheets/shepherd_dog/bark_nw.png",
+            "n": "sheets/shepherd_dog/bark_n.png",
+            "ne": "sheets/shepherd_dog/bark_ne.png"
+          },
+          "png_pattern": "png/shepherd_dog/bark/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ],
+            [
+              160,
+              0,
+              40,
+              40
+            ],
+            [
+              200,
+              0,
+              40,
+              40
+            ],
+            [
+              240,
+              0,
+              40,
+              40
+            ],
+            [
+              280,
+              0,
+              40,
+              40
+            ]
+          ]
+        },
+        {
+          "id": "pressure",
+          "label": "前压驱赶",
+          "loop": false,
+          "events": [
+            {
+              "frame_1based": 3,
+              "event": "pressure_peak",
+              "note": "前压峰值，不是咬伤或伤害接触帧",
+              "frame_index": 2
+            }
+          ],
+          "expected_frames_per_direction": 6,
+          "semantic_state": "driving_wolf",
+          "exit_to": [
+            "bark",
+            "intercept",
+            "guard_idle"
+          ],
+          "damage": false,
+          "frame_count": 6,
+          "durations_ms": [
+            100,
+            100,
+            90,
+            140,
+            120,
+            140
+          ],
+          "phases": [
+            "注视威胁",
+            "压低前身蓄力",
+            "前踏施压",
+            "保持压力",
+            "收回前脚",
+            "保持观察"
+          ],
+          "duration_ms": 690,
+          "sheets": {
+            "e": "sheets/shepherd_dog/pressure_e.png",
+            "se": "sheets/shepherd_dog/pressure_se.png",
+            "s": "sheets/shepherd_dog/pressure_s.png",
+            "sw": "sheets/shepherd_dog/pressure_sw.png",
+            "w": "sheets/shepherd_dog/pressure_w.png",
+            "nw": "sheets/shepherd_dog/pressure_nw.png",
+            "n": "sheets/shepherd_dog/pressure_n.png",
+            "ne": "sheets/shepherd_dog/pressure_ne.png"
+          },
+          "png_pattern": "png/shepherd_dog/pressure/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ],
+            [
+              160,
+              0,
+              40,
+              40
+            ],
+            [
+              200,
+              0,
+              40,
+              40
+            ]
+          ]
+        },
+        {
+          "id": "relax",
+          "label": "解除警戒",
+          "loop": false,
+          "events": [],
+          "expected_frames_per_direction": 6,
+          "semantic_state": "returning_to_guard",
+          "exit_to": [
+            "guard_idle",
+            "patrol"
+          ],
+          "frame_count": 6,
+          "durations_ms": [
+            110,
+            120,
+            130,
+            150,
+            160,
+            190
+          ],
+          "phases": [
+            "仍保持观察",
+            "放低颈部",
+            "收回重心",
+            "呼气眨眼",
+            "耳朵放松",
+            "返回守护待机"
+          ],
+          "duration_ms": 860,
+          "sheets": {
+            "e": "sheets/shepherd_dog/relax_e.png",
+            "se": "sheets/shepherd_dog/relax_se.png",
+            "s": "sheets/shepherd_dog/relax_s.png",
+            "sw": "sheets/shepherd_dog/relax_sw.png",
+            "w": "sheets/shepherd_dog/relax_w.png",
+            "nw": "sheets/shepherd_dog/relax_nw.png",
+            "n": "sheets/shepherd_dog/relax_n.png",
+            "ne": "sheets/shepherd_dog/relax_ne.png"
+          },
+          "png_pattern": "png/shepherd_dog/relax/{direction}/{frame_index:03d}.png",
+          "regions_px": [
+            [
+              0,
+              0,
+              40,
+              40
+            ],
+            [
+              40,
+              0,
+              40,
+              40
+            ],
+            [
+              80,
+              0,
+              40,
+              40
+            ],
+            [
+              120,
+              0,
+              40,
+              40
+            ],
+            [
+              160,
+              0,
+              40,
+              40
+            ],
+            [
+              200,
+              0,
+              40,
+              40
+            ]
+          ]
+        }
+      ]
+    }
+  ]
+}

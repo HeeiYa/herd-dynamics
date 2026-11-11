@@ -61,38 +61,3 @@ static func capture(world: SimulationWorld, selected: AgentHandle) -> Simulation
 	result.snapshot_usec = Time.get_ticks_usec() - started
 	result.metadata_copy_usec = result.snapshot_usec - result.store_copy_usec - result.intent_copy_usec - result.resource_copy_usec - result.quality_usec
 	return result
-
-func telemetry_copy() -> SimulationTelemetry:
-	var result := SimulationTelemetry.new()
-	result.sequence = sequence
-	result.epoch = epoch
-	result.tick = tick
-	result.published_usec = published_usec
-	result.completed_usec = completed_usec
-	result.paused = paused
-	result.speed = speed
-	result.backlog_seconds = backlog_seconds
-	result.step_usec = step_usec
-	result.snapshot_usec = snapshot_usec
-	result.pose_usec = pose_usec
-	result.store_copy_usec = store_copy_usec
-	result.intent_copy_usec = intent_copy_usec
-	result.resource_copy_usec = resource_copy_usec
-	result.metadata_copy_usec = metadata_copy_usec
-	result.quality_usec = quality_usec
-	result.pose_changed = pose_changed
-	result.pose_allocations = pose_allocations
-	result.pose_buffer_allocations = pose_buffer_allocations
-	result.pose_profile = pose_profile
-	result.ai_used_usec = ai_used_usec
-	result.phase_usec = phase_usec
-	result.active_agents = active_agents
-	result.missing_intents = missing_intents
-	result.max_perception_delay_ticks = max_perception_delay_ticks
-	result.max_decision_delay_ticks = max_decision_delay_ticks
-	result.grass_consumed = grass_consumed
-	result.perception_cells = perception_cells
-	result.motion_cells = motion_cells
-	result.tuning_values = tuning_values
-	result.tuning_applied_count = tuning_applied_count
-	return result

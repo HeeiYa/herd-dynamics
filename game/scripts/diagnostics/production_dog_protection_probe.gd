@@ -38,6 +38,9 @@ var _background_perception_ticks: PackedInt32Array = PackedInt32Array()
 var _background_decision_ticks: PackedInt32Array = PackedInt32Array()
 var _quality_observer_usec: int = 0
 
+func threat_tick() -> int:
+	return ProductionDogProtectionGeometry.threat_tick(geometry_variant)
+
 func setup(world: SimulationWorld, sheep_count: int, seed_value: int) -> void:
 	assert(world.store.count == 0 and world.pending_spawns == PackedInt32Array([0, 0, 0]))
 	assert(not world.has_pending_observer_commands())
@@ -59,7 +62,7 @@ func setup(world: SimulationWorld, sheep_count: int, seed_value: int) -> void:
 	if withdrawal_mode != ProductionDogWithdrawal.Mode.ORIGINAL:
 		_withdrawal = ProductionDogWithdrawal.new()
 		_withdrawal.mode = withdrawal_mode
-	_layout.prepare(sheep_count, seed_value)
+	_layout.prepare(sheep_count, seed_value, geometry_variant)
 	error = _layout.initial_error(world.config.agent_radius, world.config.world_size)
 	if not error.is_empty():
 		_fail(error)
@@ -74,7 +77,7 @@ func before_step(world: SimulationWorld) -> void:
 	if finished:
 		return
 	var started: int = Time.get_ticks_usec()
-	if world.tick == THREAT_TICK:
+	if world.tick == threat_tick():
 		_prepare_threats()
 	elif _withdrawal != null:
 		_withdrawal.before_step(world, _started_usec)
@@ -96,7 +99,7 @@ func _prepare_threats() -> void:
 	if _dogs.size() != 4:
 		_fail("Four complete registered dog lives are required before the stimulus")
 		return
-	var anchor_variant: bool = ProductionDogProtectionGeometry.is_anchor_variant(geometry_variant)
+	var fixed_subjects: bool = ProductionDogProtectionGeometry.has_fixed_subjects(geometry_variant)
 	for group: int in 2:
 		var positions: Array[Vector2] = []
 		var anchors: Array[Vector2] = []
@@ -104,7 +107,7 @@ func _prepare_threats() -> void:
 			var dog: AgentHandle = _dogs[group * 2 + member]
 			var dense: int = _world.store.resolve(dog)
 			var context: AgentContext = _world.ai.inspect(dog)
-			var requires_sample: bool = not anchor_variant or member == 0
+			var requires_sample: bool = not fixed_subjects or member == 0
 			var sample_valid: bool = context != null and _current_flock(context, _world.tick)
 			if dense < 0 or not _world.store.is_active(dog) or context == null or (requires_sample and not sample_valid):
 				_fail("A declared dog lacks an active life or its required current protection sample", {
@@ -115,10 +118,18 @@ func _prepare_threats() -> void:
 					"current_sample_observed_tick": context.flock_sample_observed_tick if context != null else -1,
 					"current_sample_expires_tick": context.flock_sample_expires_tick if context != null else -1})
 				return
+			if geometry_variant == ProductionDogProtectionGeometry.Variant.FIXED_CORRIDOR and member == 0:
+				var record: ProductionDogProtectionTrace = _records[group * 2 + member]
+				if record.guard_before_threat_tick < 0:
+					_fail("A fixed-corridor subject has not actually guarded before its declared stimulus", {
+						"dog": dog.key(), "group": group, "guard_before_threat_tick": record.guard_before_threat_tick})
+					return
 			positions.append(_world.store.position_current[dense])
 			anchors.append(context.protection_anchor)
 		var wolf: Vector2
-		if anchor_variant:
+		if geometry_variant == ProductionDogProtectionGeometry.Variant.FIXED_CORRIDOR:
+			wolf = ProductionDogProtectionGeometry.corridor_wolf_position(group)
+		elif ProductionDogProtectionGeometry.is_anchor_variant(geometry_variant):
 			wolf = ProductionDogProtectionGeometry.anchor_wolf_position(positions[0], anchors[0], geometry_variant)
 		else:
 			wolf = ProductionDogProtectionGeometry.wolf_position(positions[0], positions[1], geometry_variant)
@@ -127,7 +138,7 @@ func _prepare_threats() -> void:
 			var context: AgentContext = _world.ai.inspect(_dogs[group * 2 + member])
 			_preflight.append({"dog": _dogs[group * 2 + member].key(), "group": group, "tick": _world.tick,
 				"declared_role": _dog_role(_dogs[group * 2 + member]),
-				"current_sample_required": not anchor_variant or member == 0,
+				"current_sample_required": not fixed_subjects or member == 0,
 				"current_sample_valid": _current_flock(context, _world.tick),
 				"dog_x": positions[member].x, "dog_y": positions[member].y,
 				"anchor_x": anchors[member].x, "anchor_y": anchors[member].y,
@@ -136,7 +147,7 @@ func _prepare_threats() -> void:
 				"wolf_x": wolf.x, "wolf_y": wolf.y, "dog_distance": positions[member].distance_to(wolf),
 				"anchor_distance": anchors[member].distance_to(wolf)})
 		var error: String
-		if anchor_variant:
+		if fixed_subjects:
 			error = ProductionDogProtectionGeometry.subject_opportunity_error(wolf, positions[0], anchors[0],
 				_world.config.agent_radius, _world.config.world_size, _world.ai.settings.dog_risk_radius,
 				_world.config.perception_radius, _world.ai.settings.protection_radius)
@@ -174,7 +185,7 @@ func _prepare_threats() -> void:
 		_world.queue_place(SimTypes.Species.WOLF, position)
 	_events.append({"event": "place_declared_wolves", "input_tick": _world.tick,
 		"geometry": ProductionDogProtectionGeometry.variant_name(geometry_variant),
-		"meaning": "One predeclared relative placement per initial region; no retry or forced target/lease"})
+		"meaning": "One predeclared placement per initial region; no retry or forced target/lease"})
 
 func _body_conflict_details(wolf_index: int, wolf: Vector2, dense: int, distance: float) -> Dictionary:
 	var blocker: AgentHandle = _world.store.handle_at(dense)
@@ -192,7 +203,7 @@ func observe_step_start(world: SimulationWorld) -> void:
 	var started: int = Time.get_ticks_usec()
 	if _cohort.is_empty():
 		_register_initial()
-	if not finished and world.tick == THREAT_TICK:
+	if not finished and world.tick == threat_tick():
 		_register_wolves()
 	if finished:
 		observer_usec += Time.get_ticks_usec() - started
@@ -209,6 +220,8 @@ func observe_step_start(world: SimulationWorld) -> void:
 		record.previous_position = world.store.position_current[dense]
 		record.start_velocity = world.store.velocity_current[dense]
 		var context: AgentContext = world.ai.inspect(record.handle)
+		record.start_tree_present = _has_production_tree(context)
+		record.start_last_decision_tick = context.last_decision_tick
 		record.start_anchor = context.protection_anchor
 		record.start_flock_count = context.flock_count
 		record.start_flock_tick = context.flock_sample_observed_tick
@@ -232,7 +245,7 @@ func _register_initial() -> void:
 			cohort_name = "observed_sheep"
 		elif index < 84:
 			_dogs.append(actor)
-			if ProductionDogProtectionGeometry.is_anchor_variant(geometry_variant) and index % 2 == 1:
+			if ProductionDogProtectionGeometry.has_fixed_subjects(geometry_variant) and index % 2 == 1:
 				_peers.append(actor)
 			else:
 				_subjects.append(actor)
@@ -248,7 +261,7 @@ func _register_initial() -> void:
 			"tick": _world.tick, "species": _world.store.species[index], "x": position.x, "y": position.y})
 
 func _dog_role(actor: AgentHandle) -> String:
-	if not ProductionDogProtectionGeometry.is_anchor_variant(geometry_variant):
+	if not ProductionDogProtectionGeometry.has_fixed_subjects(geometry_variant):
 		return "paired_opportunity"
 	for subject: AgentHandle in _subjects:
 		if subject.same_life(actor):
@@ -278,6 +291,7 @@ func _add_record(actor: AgentHandle, species: int, group: int) -> void:
 	record.species = species
 	record.group = group
 	record.birth_tick = _world.tick
+	record.birth_observed_usec = Time.get_ticks_usec() - _started_usec
 	_records.append(record)
 
 func _observe_geometry(record: ProductionDogProtectionTrace, context: AgentContext) -> void:
@@ -347,6 +361,7 @@ func _observe_actor(record: ProductionDogProtectionTrace, tick: int) -> void:
 	var owned: bool = intent != null and intent.owner_token == context.task_token
 	var position: Vector2 = _world.store.position_current[dense]
 	var elapsed: int = Time.get_ticks_usec() - _started_usec
+	record.record_service(_has_production_tree(context), context.last_decision_tick, tick, elapsed)
 	record.active_observed_steps += 1
 	record.missing_intent_steps += int(intent == null)
 	record.unowned_intent_steps += int(intent != null and not owned)
@@ -369,6 +384,8 @@ func _observe_actor(record: ProductionDogProtectionTrace, tick: int) -> void:
 			"risk_dog_start_y": record.start_nearest_position.y if record.start_nearest_target != null else null,
 			"task": str(context.task_name), "task_token": context.task_token,
 			"perception_tick": context.last_perception_tick, "decision_tick": context.last_decision_tick,
+			"before_decision_tick": record.start_last_decision_tick, "real_tree_service": record.real_service_this_step,
+			"before_tree_present": record.start_tree_present, "after_tree_present": _has_production_tree(context),
 			"intent_present": intent != null, "intent_owned": owned,
 			"behavior": SimTypes.Behavior.keys()[intent.behavior] if intent != null else "NONE",
 			"intent_destination_x": intent.destination.x if intent != null else null,
@@ -378,6 +395,9 @@ func _observe_actor(record: ProductionDogProtectionTrace, tick: int) -> void:
 		record.record_motion(intent, position, tick, elapsed, qualified)
 		if intent.behavior == record.response_behavior():
 			record.peak_response_speed = maxf(record.peak_response_speed, _world.store.velocity_current[dense].length())
+
+static func _has_production_tree(context: AgentContext) -> bool:
+	return context.detached_tree != null or (context.player != null and context.player.get_bt_instance() != null)
 
 static func _current_flock(context: AgentContext, tick: int) -> bool:
 	return context.flock_count > 0 and context.flock_sample_count > 0 and context.flock_sample_observed_tick >= 0 and tick < context.flock_sample_expires_tick
@@ -417,7 +437,7 @@ func _observe_dog(record: ProductionDogProtectionTrace, context: AgentContext, i
 	var owned: bool = intent != null and intent.owner_token == context.task_token
 	var current_flock: bool = _current_flock(context, tick)
 	var at_guard: bool = owned and intent.behavior == SimTypes.Behavior.GUARD and current_flock and position.distance_to(context.protection_anchor) <= _world.ai.settings.guard_arrival_distance
-	if tick < THREAT_TICK and at_guard and record.guard_before_threat_tick < 0:
+	if tick < threat_tick() and at_guard and record.guard_before_threat_tick < 0:
 		record.guard_before_threat_tick = tick + 1
 	if owned and intent.behavior == SimTypes.Behavior.GUARD and _world.ai.coordination.get_lease(record.handle, tick) == null:
 		record.guard_without_lease_ticks += 1
@@ -441,6 +461,8 @@ func _observe_dog(record: ProductionDogProtectionTrace, context: AgentContext, i
 	var row: Dictionary = _dog_diagnostics.contexts.back()
 	var dense: int = _world.store.resolve(record.handle)
 	row.merge({"start_x": record.previous_position.x, "start_y": record.previous_position.y,
+		"before_decision_tick": record.start_last_decision_tick, "real_tree_service": record.real_service_this_step,
+		"before_tree_present": record.start_tree_present, "after_tree_present": _has_production_tree(context),
 		"declared_role": _dog_role(record.handle),
 		"start_velocity_x": record.start_velocity.x, "start_velocity_y": record.start_velocity.y,
 		"end_velocity_x": _world.store.velocity_current[dense].x, "end_velocity_y": _world.store.velocity_current[dense].y,
@@ -582,7 +604,7 @@ func finish_report() -> Dictionary:
 	report.merge({"fixture_valid": _fixture_error.is_empty(), "fixture_error": _fixture_error,
 		"fixture_error_details": _fixture_error_details.duplicate(true),
 		"geometry": ProductionDogProtectionGeometry.variant_name(geometry_variant),
-		"stimulus_tick": THREAT_TICK, "remove_wolves_tick": CLEAR_THREATS_TICK if _withdrawal == null else -1,
+		"stimulus_tick": threat_tick(), "remove_wolves_tick": CLEAR_THREATS_TICK if _withdrawal == null else -1,
 		"declared_observed_sheep": 80, "declared_dogs": 4, "declared_wolves": 2,
 		"registered_cohort": _cohort.size(), "registered_background": _background.size(),
 		"registered_dogs": _dogs.size(), "registered_wolves": _wolves.size(),
@@ -604,7 +626,10 @@ func finish_report() -> Dictionary:
 		"anchor_evidence": "Context sample centers/counts/ticks are historical AI observations. Anchor cells are derived from these centers. Change rows count only the fixed80 sheep geometrically visible at the post-motion endpoint, excluding background; they are not same-scan candidate scores or permanent flock membership. No production query or strategy is repeated by this observer.",
 		"background_evidence": "920 extra sheep are ordinary active participants in motion, AI and common resources. Only 60tick snapshots are taken; net displacement >=1px is a sampled lower bound, and zero sampled intrusion/missing is not a continuous-window claim. Fixed seed does not hold autonomous foreground trajectories equal across loads.",
 		"recovery_evidence": "All dogs still alive at wolf removal are separately eligible to regain a current local protection sample and GUARD inside the unchanged arrival distance. Already guarding is a valid recovery endpoint; no artificial extra movement is demanded. No permanent flock identity is claimed.",
+		"service_evidence": "A real service requires production tree presence both before and after the step, after.last_decision_tick=input_tick and an advance from the before value. Birth-step initialization with the same tick is not counted. decision_tick remains the old first owned response-intent endpoint. post_exposure_service_count includes every later call after the first exposure, even after exposure ends or wolves are removed; it must not be divided by exposure_ticks as a threat-window rate. Completed service gaps, first post-exposure service, initial wait and terminal open age coexist; a -1 gap means fewer than two detected calls, never zero latency. Wall intervals use the same monotonic observer clock and include observer work, not CPU service duration. Exposed lives remain complete; successful-only percentiles cannot replace their denominator.",
 	})
+	if geometry_variant == ProductionDogProtectionGeometry.Variant.FIXED_CORRIDOR:
+		report["subject_assignment"] = "v3 fixes dog registration indices0/2 as subjects and1/3 as peers in the declared two-row corridor layout. Subjects must actually GUARD before input60 and hold a current real protection sample then. Wolf coordinates are fixed from initial group centers, never computed from live positions/anchors, searched or retried. The105/180/200px and body gates remain unchanged. Every peer, subject and wolf retains its complete life denominator; a peer may legitimately win a lease. Background is ordinary simulation, not frozen load."
 	if _withdrawal != null:
 		report.merge(_withdrawal.report(), true)
 		report["recovery_evidence"] = "Not applicable: this protocol never removes wolves at600. Use withdrawal_outcomes for wolf response, retaining all original dog/sheep/wolf identities."

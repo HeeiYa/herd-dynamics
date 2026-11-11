@@ -1,0 +1,6 @@
+# The atlas source digest includes the manifest's exact bytes.
+assets/art/v3/manifest.json -text whitespace=cr-at-eol
+game/assets/animals.json -text whitespace=cr-at-eol
+*.png binary
+*.aseprite binary
+*.dll binary

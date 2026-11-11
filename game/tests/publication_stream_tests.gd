@@ -28,7 +28,15 @@ func _run() -> void:
 	var handle: AgentHandle = world.store.handle_at(0)
 	var first_pose: PublishedPose
 	var pinned: SimulationPublication
+	var pinned_metrics: SimulationTelemetry
+	var first_tuning_values := PackedFloat64Array()
 	for sequence: int in SimulationExecutor.PUBLICATION_LIMIT:
+		if sequence == 1:
+			world.queue_tuning(TuningCatalog.Change.new(TuningCatalog.Param.SHEEP_SPEED, 1.25))
+			world._apply_commands()
+		# Change owner-side counters between publications; retained reliable
+		# metrics must continue to describe their original completed state.
+		world.phase_usec[0] = sequence + 10
 		var intent := MotionIntent.new()
 		intent.behavior = SimTypes.Behavior.FLEE if sequence % 2 == 0 else SimTypes.Behavior.IDLE
 		intent.expires_tick = 100
@@ -46,6 +54,8 @@ func _run() -> void:
 		if sequence == 0:
 			pinned = executor._latest
 			first_pose = pinned.pose_at(0)
+			pinned_metrics = executor._deliveries[0].metrics
+			first_tuning_values = pinned_metrics.tuning_values.duplicate()
 	_check(executor._deliveries.size() == 8, "Eight reliable batches are retained at the capacity boundary")
 	_check(executor.poll_state(-1) == null, "State cannot overtake undelivered reliable facts")
 	var behavior_count: int = 0
@@ -66,6 +76,9 @@ func _run() -> void:
 	_check(newest.sequence == 7 and executor.poll_state(7) == null, "Display mailbox yields only the newest unread state")
 	_check(pinned.store.position_current[0] == Vector2(0, 100) and first_pose.behavior == SimTypes.Behavior.FLEE, "Delivered snapshots and poses remain immutable after later publications")
 	_check(newest.pose_at(0).behavior == SimTypes.Behavior.IDLE, "Latest state is self-contained after seven skipped versions")
+	_check(pinned_metrics.phase_usec[0] == 10 and newest.phase_usec[0] == 17, "Reliable stage timings keep their original sample after later owner updates")
+	_check(pinned_metrics.tuning_values == first_tuning_values and newest.tuning_values != first_tuning_values, "Reliable parameter columns remain historical after applied tuning")
+	_check(pinned_metrics.sequence == pinned.sequence and pinned_metrics.completed_usec == pinned.completed_usec and pinned_metrics.tick == pinned.tick, "Retained telemetry keeps the sequence and completion endpoint of its own state")
 	var motion_clock: int = newest.completed_usec
 	_check(newest.previous_completed_usec <= motion_clock, "Display age retains the actual two wall-clock endpoints")
 	executor._publish(world, 0)

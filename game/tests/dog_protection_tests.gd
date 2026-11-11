@@ -25,6 +25,9 @@ func _run() -> void:
 	_check_anchor_arguments_and_geometry()
 	_check_anchor_subjects_and_peer_evidence()
 	_check_anchor_atomic_peer_risk()
+	_check_corridor_matrix_and_layout()
+	_check_corridor_preflight_and_timing()
+	_check_real_service_endpoints()
 	print("DOG_PROTECTION_TESTS checks=%d failures=%d" % [_checks, _failures])
 	quit(0 if _failures == 0 else 1)
 
@@ -128,8 +131,8 @@ func _fixture_flock_samples(world: SimulationWorld, probe: ProductionDogProtecti
 		var context: AgentContext = world.ai.inspect(dog)
 		context.flock_count = 2
 		context.flock_sample_count = 2
-		context.flock_sample_observed_tick = 239
-		context.flock_sample_expires_tick = 269
+		context.flock_sample_observed_tick = probe.threat_tick() - 1
+		context.flock_sample_expires_tick = probe.threat_tick() + 29
 		context.protection_anchor = world.store.position_current[world.store.resolve(dog)]
 
 func _check_registration_and_preflight() -> void:
@@ -416,3 +419,105 @@ func _check_anchor_atomic_peer_risk() -> void:
 	_check(report["fixture_error_details"]["blocker"] == peer.key() and report["fixture_error_details"]["distance"] == 50.0, "The retained peer is the exact blocker, not a missing-subject or arbitrary overlap diagnosis")
 	_check(report["requested_wolf_positions"].size() == 2 and world.counts()[SimTypes.Species.WOLF] == 0 and not world.has_pending_observer_commands(), "Both positions are checked atomically; one peer conflict never launches the other wolf alone")
 	_close(world)
+
+func _check_corridor_matrix_and_layout() -> void:
+	var runs: Array[Dictionary] = ProductionDogProtectionGeometry.corridor_runs()
+	_check(runs.size() == 6, "Fixed-corridor declares all three seeds at both populations before execution")
+	var combinations: Dictionary[String, bool] = {}
+	for run: Dictionary in runs:
+		var arguments := PackedStringArray(["--dog-geometry=fixed-corridor", "--sheep=" + str(run["sheep"]), "--seed=" + str(run["seed"])])
+		_check(ProductionDogProtectionGeometry.argument_error(arguments, "dog-protection", run["sheep"], run["seed"]).is_empty(), "Each exact corridor population and seed is accepted")
+		combinations[str(run["sheep"]) + ":" + str(run["seed"])] = true
+		var layout := ProductionDogProtectionGeometry.new()
+		layout.prepare(run["sheep"], run["seed"], ProductionDogProtectionGeometry.Variant.FIXED_CORRIDOR)
+		_check(layout.initial_error(13.0, Vector2(2400, 1400)).is_empty(), "Every declared corridor initial roster has complete nonoverlapping in-bounds bodies")
+		for group: int in 2:
+			var center: Vector2 = ProductionDogProtectionGeometry.GROUP_CENTERS[group]
+			_check(layout.positions[80 + group * 2] == center + Vector2(0, -28), "The opportunity subject is fixed above the two sheep rows")
+			_check(layout.positions[81 + group * 2] == center + Vector2(0, 100), "The peer remains an independently registered dog below the rows")
+			var wolf: Vector2 = ProductionDogProtectionGeometry.corridor_wolf_position(group)
+			_check(wolf == center + Vector2(0, -168), "A corridor wolf uses its fixed original coordinate, not a live anchor projection")
+			var minimum_body_distance: float = INF
+			for position: Vector2 in layout.positions:
+				minimum_body_distance = minf(minimum_body_distance, wolf.distance_to(position))
+			_check(minimum_body_distance > 105.0, "Initial corridor starts clear of every real body and every dog's passive risk")
+	_check(combinations.size() == 6, "The matrix contains six unique count/seed combinations")
+	for seed_value: int in [42, 43, 44]:
+		var small := ProductionDogProtectionGeometry.new()
+		var large := ProductionDogProtectionGeometry.new()
+		small.prepare(80, seed_value, ProductionDogProtectionGeometry.Variant.FIXED_CORRIDOR)
+		large.prepare(1000, seed_value, ProductionDogProtectionGeometry.Variant.FIXED_CORRIDOR)
+		_check(small.positions == large.positions.slice(0, 84) and small.species == large.species.slice(0, 84), "Background preserves all84 foreground bodies, species and random prefixes")
+	_check(not ProductionDogProtectionGeometry.argument_error(PackedStringArray(["--dog-geometry=fixed-corridor"]), "dog-protection", 80, 45).is_empty(), "A new unplanned seed cannot replace a failed corridor run")
+	_check(not ProductionDogProtectionGeometry.argument_error(PackedStringArray(["--dog-geometry=fixed-corridor"]), "dog-withdrawal", 80, 43).is_empty(), "Corridor timing cannot leak into the original withdrawal protocol")
+	_check(ProductionDogProtectionGeometry.protocol_version(ProductionDogProtectionGeometry.Variant.FIXED_CORRIDOR) == ProductionDogProtectionGeometry.CORRIDOR_VERSION, "Corridor has a separate v3 identity")
+	_check(ProductionDogProtectionGeometry.threat_tick(ProductionDogProtectionGeometry.Variant.NORMAL) == 240 and ProductionDogProtectionGeometry.threat_tick(ProductionDogProtectionGeometry.Variant.ANCHOR_OBLIQUE) == 240, "Both historical protocols retain input240")
+
+func _check_corridor_preflight_and_timing() -> void:
+	var world: SimulationWorld = _new_world()
+	var probe: ProductionDogProtectionProbe = _registered(world, ProductionDogProtectionGeometry.Variant.FIXED_CORRIDOR)
+	_fixture_flock_samples(world, probe)
+	world.tick = 60
+	probe.before_step(world)
+	_check(probe.finished and probe.finish_report()["fixture_error"].contains("has not actually guarded"), "A valid geometric sample alone cannot claim the subject already established guard")
+	_check(not world.has_pending_observer_commands(), "Missing actual guard rejects the complete batch before any spawn")
+	_close(world)
+	world = _new_world()
+	probe = _registered(world, ProductionDogProtectionGeometry.Variant.FIXED_CORRIDOR)
+	_fixture_flock_samples(world, probe)
+	# These are evidence-gate fixtures, not autonomous behavior results.
+	probe._records[0].guard_before_threat_tick = 10
+	probe._records[2].guard_before_threat_tick = 11
+	world.tick = 59
+	probe.before_step(world)
+	_check(not world.has_pending_observer_commands(), "The corridor does not launch its stimulus early")
+	world.tick = 60
+	probe.before_step(world)
+	_check(not probe.finished and world.has_pending_observer_commands(), "Guarded corridor subjects submit the fixed two-wolf batch at input60")
+	world._apply_commands()
+	probe.observe_step_start(world)
+	var report: Dictionary = probe.finish_report()
+	_check(report["fixture_valid"] and report["stimulus_tick"] == 60 and report["registered_wolves"] == 2, "Registration, report and preflight share the variant-specific stimulus endpoint")
+	_check(report["outcomes"][0]["cohort"] == 4 and report["subject_outcomes"]["cohort"] == 2 and report["peer_outcomes"]["cohort"] == 2, "All four dogs and both fixed subcohorts survive the v3 reporting path")
+	_check(probe._wolves.size() == 2 and probe._records.size() == 6, "Both wolves have complete independent life records")
+	world.tick = 240
+	probe.before_step(world)
+	_check(not world.has_pending_observer_commands(), "The historical240 endpoint cannot create a second corridor stimulus")
+	world.tick = 600
+	probe.before_step(world)
+	world._apply_commands()
+	_check(world.counts() == PackedInt32Array([80, 0, 4]), "The corridor still removes only its two wolves through normal stage0 at600")
+	_close(world)
+
+func _check_real_service_endpoints() -> void:
+	var record := ProductionDogProtectionTrace.new()
+	record.handle = AgentHandle.new(4, 1, 2)
+	record.birth_tick = 60
+	record.birth_observed_usec = 1000000
+	record.start_tree_present = true
+	record.start_last_decision_tick = 60
+	record.eligible_tick = 60
+	record.record_service(true, 60, 60, 1000100)
+	_check(record.service_count == 0 and record.first_post_exposure_service_tick < 0, "An unchanged birth initialization tick never manufactures a real service")
+	record.record_service(false, 61, 61, 1010000)
+	_check(record.service_count == 0, "A missing tree cannot supply a service endpoint")
+	record.record_service(true, 61, 61, 1011000)
+	_check(record.service_count == 1 and record.first_service_tick == 61 and record.first_post_exposure_service_tick == 61, "A present tree with this step's advanced decision clock supplies the first actual service")
+	_check(record.maximum_service_gap_ticks == -1, "One call has no completed interval and must not report a zero-latency gap")
+	record.start_last_decision_tick = 61
+	record.record_service(true, 65, 65, 1051000)
+	_check(record.service_count == 2 and record.post_exposure_service_count == 2 and record.maximum_service_gap_ticks == 4 and record.maximum_service_gap_usec == 40000, "Completed simulated and wall service intervals use the original endpoint clocks")
+	record.start_last_decision_tick = 65
+	record.record_service(true, 65, 70, 1101000)
+	var row: Dictionary = record.to_dictionary()
+	_check(row["last_active_endpoint_tick"] == 71 and row["terminal_service_age_ticks"] == 6 and row["terminal_service_age_usec"] == 50000, "An unserved terminal tail remains visible independently of completed interval maxima")
+	_check(row["initial_service_wait_ticks"] == 1 and row["initial_service_wait_usec"] == 11000, "The initial wait is recorded separately from between-service intervals")
+	var unserved := ProductionDogProtectionTrace.new()
+	unserved.handle = AgentHandle.new(5, 1, 2)
+	unserved.birth_tick = 60
+	unserved.birth_observed_usec = 1000000
+	unserved.eligible_tick = 60
+	unserved.record_service(false, 60, 70, 1101000)
+	row = unserved.to_dictionary()
+	_check(row["service_count"] == 0 and row["exposed_without_subsequent_real_service"] and row["initial_service_wait_ticks"] == 11, "A never-served exposed life stays in the denominator with its full observed wait")
+	_check(row["maximum_completed_service_gap_ticks"] == -1 and row["terminal_service_age_ticks"] == -1, "Missing endpoints are explicit and cannot look like instantaneous service")

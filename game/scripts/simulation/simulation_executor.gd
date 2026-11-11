@@ -581,6 +581,13 @@ func _publish(world: SimulationWorld, step_usec: int, closing: bool = false) -> 
 	publication.step_usec = step_usec
 	publication.published_usec = Time.get_ticks_usec()
 	publication.snapshot_usec = publication.published_usec - completed_usec
+	_enqueue_publication(world, publication, closing)
+	_observe_endurance_publication(publication, closing)
+
+## Transfers a complete display state and its reliable batch together. The
+## mailbox lock protects ownership exchange, never snapshot construction.
+func _enqueue_publication(world: SimulationWorld, publication: SimulationPublication, closing: bool) -> void:
+	var step_usec: int = publication.step_usec
 	var delivery := SimulationDelivery.new()
 	delivery.sequence = publication.sequence
 	delivery.notices = _notices
@@ -613,16 +620,21 @@ func _publish(world: SimulationWorld, step_usec: int, closing: bool = false) -> 
 	_latest = publication
 	_mutex.unlock()
 	replaced = null
-	if _endurance_probe != null and not closing:
-		var revision: int = _endurance_probe.status_revision
-		_endurance_probe.observe_publication(publication)
-		if revision != _endurance_probe.status_revision:
-			var status: Dictionary = _endurance_probe.status()
-			_mutex.lock()
-			_endurance_snapshot = status
-			if _endurance_probe.finished:
-				_endurance_report = _endurance_probe.final_report
-			_mutex.unlock()
+
+## Runs on the owner after mailbox handoff. Only completed scalar status and
+## reports cross threads; the diagnostic probe itself keeps its World local.
+func _observe_endurance_publication(publication: SimulationPublication, closing: bool) -> void:
+	if _endurance_probe == null or closing:
+		return
+	var revision: int = _endurance_probe.status_revision
+	_endurance_probe.observe_publication(publication)
+	if revision != _endurance_probe.status_revision:
+		var status: Dictionary = _endurance_probe.status()
+		_mutex.lock()
+		_endurance_snapshot = status
 		if _endurance_probe.finished:
-			_paused = true
-			_endurance_probe = null
+			_endurance_report = _endurance_probe.final_report
+		_mutex.unlock()
+	if _endurance_probe.finished:
+		_paused = true
+		_endurance_probe = null
